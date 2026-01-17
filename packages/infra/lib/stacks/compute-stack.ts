@@ -71,6 +71,28 @@ export class ComputeStack extends cdk.Stack {
       SEARCH_COLLECTION: searchCollection.name,
     };
 
+    // Common bundling options for all Lambda functions
+    const bundlingOptions = {
+      minify: environment === 'prod',
+      sourceMap: environment !== 'prod',
+      // Mark packages from Lambda layer as external
+      externalModules: [
+        '@aws-sdk/*',
+        '@opensearch-project/opensearch',
+        '@opensearch-project/opensearch/*',
+        'uuid',
+      ],
+      // Use local esbuild if available, otherwise Docker
+      forceDockerBundling: false,
+      // Add path aliases to resolve @ultrathink/shared
+      define: {
+        'process.env.NODE_ENV': JSON.stringify(environment),
+      },
+      esbuildArgs: {
+        '--alias:@ultrathink/shared': path.join(__dirname, '../../../shared/src'),
+      },
+    };
+
     // Capture Lambda - handles incoming thoughts
     this.captureLambda = new lambdaNodejs.NodejsFunction(this, 'CaptureLambda', {
       functionName: `${projectName}-capture-${environment}`,
@@ -85,11 +107,7 @@ export class ComputeStack extends cdk.Stack {
       },
       layers: [sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
-      bundling: {
-        minify: environment === 'prod',
-        sourceMap: environment !== 'prod',
-        externalModules: ['@aws-sdk/*'],
-      },
+      bundling: bundlingOptions,
     });
 
     // Grant permissions
@@ -109,11 +127,7 @@ export class ComputeStack extends cdk.Stack {
       layers: [sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       reservedConcurrentExecutions: 10, // Limit concurrency to avoid Bedrock throttling
-      bundling: {
-        minify: environment === 'prod',
-        sourceMap: environment !== 'prod',
-        externalModules: ['@aws-sdk/*'],
-      },
+      bundling: bundlingOptions,
     });
 
     // Add SQS trigger
@@ -152,11 +166,7 @@ export class ComputeStack extends cdk.Stack {
       environment: commonEnv,
       layers: [sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
-      bundling: {
-        minify: environment === 'prod',
-        sourceMap: environment !== 'prod',
-        externalModules: ['@aws-sdk/*'],
-      },
+      bundling: bundlingOptions,
     });
 
     // Grant permissions
@@ -183,11 +193,7 @@ export class ComputeStack extends cdk.Stack {
       environment: commonEnv,
       layers: [sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
-      bundling: {
-        minify: environment === 'prod',
-        sourceMap: environment !== 'prod',
-        externalModules: ['@aws-sdk/*'],
-      },
+      bundling: bundlingOptions,
     });
 
     thoughtsTable.grantReadData(this.thoughtsLambda);
@@ -206,11 +212,7 @@ export class ComputeStack extends cdk.Stack {
       },
       layers: [sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
-      bundling: {
-        minify: environment === 'prod',
-        sourceMap: environment !== 'prod',
-        externalModules: ['@aws-sdk/*'],
-      },
+      bundling: bundlingOptions,
     });
 
     // Grant permissions

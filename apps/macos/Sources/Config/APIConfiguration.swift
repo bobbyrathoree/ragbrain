@@ -18,7 +18,8 @@ final class APIConfiguration: ObservableObject {
     /// Connection status
     @Published var isConnected: Bool = false
 
-    private let defaultBaseURL = "https://api.ultrathink.dev"
+    // Deployed API Gateway endpoint (us-west-2)
+    private let defaultBaseURL = "https://yforrbwe60.execute-api.us-west-2.amazonaws.com/dev"
 
     private init() {
         self.baseURL = UserDefaults.standard.string(forKey: "ultrathink.apiBaseURL") ?? defaultBaseURL

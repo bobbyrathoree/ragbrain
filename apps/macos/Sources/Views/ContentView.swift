@@ -91,102 +91,237 @@ struct HypergraphView: View {
     @Binding var selectedThought: Thought?
     @Binding var hoveredNode: String?
     let searchQuery: String
-    @State private var cameraPosition = SCNVector3(0, 0, 15)
-    @State private var rotation: Double = 0
-    
-    var scene: SCNScene {
+    @StateObject private var graphManager = GraphManager()
+    @State private var cameraPosition = SCNVector3(0, 0, 25)
+    @State private var selectedNodeId: String?
+    @State private var clusterColors: [String: NSColor] = [:]
+
+    var body: some View {
+        ZStack {
+            if graphManager.isLoading && graphManager.graphData == nil {
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("Loading knowledge graph...")
+                        .foregroundStyle(.secondary)
+                }
+            } else if let graphData = graphManager.graphData, !graphData.nodes.isEmpty {
+                SceneView(
+                    scene: buildScene(from: graphData),
+                    pointOfView: cameraNode(),
+                    options: [.allowsCameraControl, .autoenablesDefaultLighting]
+                )
+                .overlay(alignment: .topLeading) {
+                    MinimapView()
+                        .frame(width: 200, height: 200)
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .padding()
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if let clusters = graphData.clusters {
+                        ClusterLegendView(clusters: clusters)
+                            .padding()
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if let meta = graphData.metadata {
+                        HStack(spacing: 16) {
+                            Label("\(meta.totalNodes) nodes", systemImage: "circle.fill")
+                            Label("\(meta.totalEdges) connections", systemImage: "link")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                    }
+                }
+            } else {
+                VStack(spacing: 16) {
+                    Image(systemName: "network")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.tertiary)
+                    Text("No graph data yet")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Capture more thoughts to see connections")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Button("Refresh") {
+                        Task { await graphManager.refresh() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            if let error = graphManager.error {
+                VStack {
+                    Spacer()
+                    Label(error.localizedDescription, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .padding()
+                }
+            }
+        }
+        .task {
+            await graphManager.loadGraph()
+        }
+    }
+
+    private func buildScene(from graphData: GraphResponse) -> SCNScene {
         let scene = SCNScene()
         scene.background.contents = NSColor.clear
-        
-        // Create nodes with spring physics
-        // This would be populated from actual data
-        let nodePositions = generateUMAPLayout(thoughtCount: 100)
-        
-        for (index, position) in nodePositions.enumerated() {
-            let sphere = SCNSphere(radius: 0.2)
-            let material = SCNMaterial()
-            material.diffuse.contents = NSColor.systemBlue
-            material.emission.contents = NSColor.systemBlue.withAlphaComponent(0.3)
-            sphere.materials = [material]
-            
-            let node = SCNNode(geometry: sphere)
-            node.position = position
-            node.name = "thought_\(index)"
-            
-            // Add physics for organic movement
-            let physicsBody = SCNPhysicsBody(type: .dynamic, shape: nil)
-            physicsBody.mass = 0.1
-            physicsBody.damping = 0.8
-            node.physicsBody = physicsBody
-            
-            scene.rootNode.addChildNode(node)
+
+        // Build cluster color map
+        var colorMap: [String: NSColor] = [:]
+        if let clusters = graphData.clusters {
+            for cluster in clusters {
+                colorMap[cluster.id] = nsColor(from: cluster.color)
+            }
         }
-        
-        // Add connections between related thoughts
-        addConnectionLines(to: scene.rootNode)
-        
-        // Ambient and directional lighting
+
+        // Create node lookup for edge creation
+        var nodePositions: [String: SCNVector3] = [:]
+
+        // Create thought nodes
+        for node in graphData.nodes {
+            let pos = node.position3D
+            let position = SCNVector3(pos.x, pos.y, pos.z)
+            nodePositions[node.id] = position
+
+            // Node size based on importance
+            let radius = CGFloat(0.15 + node.importance * 0.25)
+            let sphere = SCNSphere(radius: radius)
+
+            // Color based on cluster
+            let color = node.clusterId.flatMap { colorMap[$0] } ?? NSColor.systemBlue
+            let material = SCNMaterial()
+            material.diffuse.contents = color
+            material.emission.contents = color.withAlphaComponent(0.3 * CGFloat(node.recency))
+            material.shininess = 0.5
+            sphere.materials = [material]
+
+            let scnNode = SCNNode(geometry: sphere)
+            scnNode.position = position
+            scnNode.name = node.id
+
+            scene.rootNode.addChildNode(scnNode)
+        }
+
+        // Create edge connections
+        for edge in graphData.edges {
+            guard let start = nodePositions[edge.source],
+                  let end = nodePositions[edge.target],
+                  edge.similarity > 0.3 else { continue }
+
+            let lineNode = createLineNode(from: start, to: end, similarity: edge.similarity)
+            scene.rootNode.addChildNode(lineNode)
+        }
+
+        // Lighting
         let ambientLight = SCNLight()
         ambientLight.type = .ambient
-        ambientLight.intensity = 300
+        ambientLight.intensity = 400
         ambientLight.color = NSColor.white
         let ambientNode = SCNNode()
         ambientNode.light = ambientLight
         scene.rootNode.addChildNode(ambientNode)
-        
+
+        let directionalLight = SCNLight()
+        directionalLight.type = .directional
+        directionalLight.intensity = 600
+        let directionalNode = SCNNode()
+        directionalNode.light = directionalLight
+        directionalNode.position = SCNVector3(5, 10, 10)
+        directionalNode.look(at: SCNVector3(0, 0, 0))
+        scene.rootNode.addChildNode(directionalNode)
+
         return scene
     }
-    
-    var body: some View {
-        SceneView(
-            scene: scene,
-            pointOfView: cameraNode(),
-            options: [.allowsCameraControl, .autoenablesDefaultLighting]
+
+    private func createLineNode(from start: SCNVector3, to end: SCNVector3, similarity: Double) -> SCNNode {
+        let vector = SCNVector3(end.x - start.x, end.y - start.y, end.z - start.z)
+        let distance = sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+
+        let cylinder = SCNCylinder(radius: CGFloat(0.01 + similarity * 0.02), height: CGFloat(distance))
+        let material = SCNMaterial()
+        material.diffuse.contents = NSColor.white.withAlphaComponent(CGFloat(similarity * 0.5))
+        material.emission.contents = NSColor.systemCyan.withAlphaComponent(CGFloat(similarity * 0.3))
+        cylinder.materials = [material]
+
+        let lineNode = SCNNode(geometry: cylinder)
+
+        // Position at midpoint
+        lineNode.position = SCNVector3(
+            (start.x + end.x) / 2,
+            (start.y + end.y) / 2,
+            (start.z + end.z) / 2
         )
-        .overlay(alignment: .topLeading) {
-            // Minimap overlay
-            MinimapView()
-                .frame(width: 200, height: 200)
-                .padding()
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .padding()
-        }
-        .overlay(alignment: .bottomTrailing) {
-            // Cluster legend
-            ClusterLegend()
-                .padding()
-        }
-        .onAppear {
-            withAnimation(.linear(duration: 60).repeatForever(autoreverses: false)) {
-                rotation = 360
-            }
-        }
+
+        // Rotate to align with the vector
+        lineNode.look(at: end, up: scene.rootNode.worldUp, localFront: SCNVector3(0, 1, 0))
+
+        return lineNode
     }
-    
+
     private func cameraNode() -> SCNNode {
         let camera = SCNCamera()
         camera.fieldOfView = 60
+        camera.zNear = 0.1
+        camera.zFar = 200
         let cameraNode = SCNNode()
         cameraNode.camera = camera
         cameraNode.position = cameraPosition
         return cameraNode
     }
-    
-    private func generateUMAPLayout(thoughtCount: Int) -> [SCNVector3] {
-        // Simplified UMAP-like layout generation
-        var positions: [SCNVector3] = []
-        for _ in 0..<thoughtCount {
-            let x = Float.random(in: -10...10)
-            let y = Float.random(in: -10...10)
-            let z = Float.random(in: -5...5)
-            positions.append(SCNVector3(x, y, z))
+
+    private func nsColor(from hex: String) -> NSColor {
+        let cleanHex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard cleanHex.count == 6, let intVal = Int(cleanHex, radix: 16) else {
+            return NSColor.systemBlue
         }
-        return positions
+        let red = CGFloat((intVal >> 16) & 0xFF) / 255.0
+        let green = CGFloat((intVal >> 8) & 0xFF) / 255.0
+        let blue = CGFloat(intVal & 0xFF) / 255.0
+        return NSColor(red: red, green: green, blue: blue, alpha: 1.0)
     }
-    
-    private func addConnectionLines(to rootNode: SCNNode) {
-        // Add glowing connection lines between related nodes
-        // This would be based on actual similarity scores
+
+    private var scene: SCNScene { SCNScene() }
+}
+
+// MARK: - Cluster Legend View
+struct ClusterLegendView: View {
+    let clusters: [GraphCluster]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Clusters")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+
+            ForEach(clusters.prefix(6)) { cluster in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(cluster.swiftUIColor)
+                        .frame(width: 10, height: 10)
+                    Text(cluster.label)
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+            }
+
+            if clusters.count > 6 {
+                Text("+\(clusters.count - 6) more")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -257,79 +392,281 @@ struct TimelineHeatmapView: View {
 struct ConstellationView: View {
     @Binding var selectedThought: Thought?
     let searchQuery: String
+    @StateObject private var graphManager = GraphManager()
     @State private var stars: [Star] = []
-    @State private var constellations: [Constellation] = []
-    
+    @State private var connections: [(Star, Star)] = []
+    @State private var offset: CGSize = .zero
+    @State private var scale: CGFloat = 1.0
+    @State private var selectedStarId: String?
+
     struct Star: Identifiable {
-        let id = UUID()
+        let id: String
         var position: CGPoint
         var brightness: Double
         var size: Double
-        var thought: Thought?
+        var color: Color
+        var tags: [String]
         var pulsePhase: Double
     }
-    
-    struct Constellation: Identifiable {
-        let id = UUID()
-        let stars: [Star]
-        let topic: String
-        let path: Path
-    }
-    
+
     var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                // Draw starfield background
-                drawStarfield(context: context, size: size, time: timeline.date)
-                
-                // Draw constellation connections
-                for constellation in constellations {
-                    drawConstellation(context: context, constellation: constellation)
-                }
-                
-                // Draw thought stars
-                for star in stars {
-                    drawStar(context: context, star: star, time: timeline.date)
-                }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        // Pan around the starfield
+        GeometryReader { geometry in
+            TimelineView(.animation(minimumInterval: 1/30)) { timeline in
+                Canvas { context, size in
+                    // Draw background starfield
+                    drawBackgroundStars(context: context, size: size, time: timeline.date)
+
+                    // Apply pan and zoom transformations
+                    context.translateBy(x: size.width / 2 + offset.width, y: size.height / 2 + offset.height)
+                    context.scaleBy(x: scale, y: scale)
+                    context.translateBy(x: -size.width / 2, y: -size.height / 2)
+
+                    // Draw constellation lines
+                    for (star1, star2) in connections {
+                        drawConnectionLine(context: context, from: star1, to: star2)
                     }
-            )
-            .onTapGesture { location in
-                // Select thought at location
+
+                    // Draw thought stars
+                    for star in stars {
+                        drawThoughtStar(context: context, star: star, time: timeline.date, isSelected: star.id == selectedStarId)
+                    }
+                }
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            offset = CGSize(
+                                width: offset.width + value.translation.width,
+                                height: offset.height + value.translation.height
+                            )
+                        }
+                )
+                .gesture(
+                    MagnifyGesture()
+                        .onChanged { value in
+                            scale = max(0.5, min(3.0, value.magnification))
+                        }
+                )
+                .onTapGesture { location in
+                    selectStar(at: location, size: geometry.size)
+                }
             }
         }
         .background(
             LinearGradient(
                 colors: [
                     Color.black,
-                    Color(red: 0.05, green: 0.05, blue: 0.15),
-                    Color(red: 0.1, green: 0.05, blue: 0.2)
+                    Color(red: 0.02, green: 0.02, blue: 0.08),
+                    Color(red: 0.05, green: 0.02, blue: 0.12)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
         )
         .overlay(alignment: .topTrailing) {
-            // Constellation filter controls
-            ConstellationControls()
-                .padding()
+            ConstellationControlsView(
+                starCount: stars.count,
+                connectionCount: connections.count,
+                onRefresh: { Task { await graphManager.refresh(); buildStarfield() } }
+            )
+            .padding()
+        }
+        .overlay(alignment: .bottomLeading) {
+            if let selectedId = selectedStarId, let star = stars.first(where: { $0.id == selectedId }) {
+                StarInfoCard(star: star)
+                    .padding()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .task {
+            await graphManager.loadGraph()
+            buildStarfield()
         }
     }
-    
-    private func drawStarfield(context: GraphicsContext, size: CGSize, time: Date) {
-        // Draw twinkling background stars
+
+    private func buildStarfield() {
+        guard let graphData = graphManager.graphData else { return }
+
+        // Convert graph nodes to stars
+        stars = graphData.nodes.map { node in
+            Star(
+                id: node.id,
+                position: CGPoint(x: CGFloat(node.x) * 50 + 400, y: CGFloat(node.y) * 50 + 300),
+                brightness: node.recency,
+                size: 2 + node.importance * 6,
+                color: colorForCluster(node.clusterId, clusters: graphData.clusters),
+                tags: node.tags,
+                pulsePhase: Double.random(in: 0...Double.pi * 2)
+            )
+        }
+
+        // Build connections from edges with high similarity
+        connections = graphData.edges.compactMap { edge in
+            guard edge.similarity > 0.5,
+                  let star1 = stars.first(where: { $0.id == edge.source }),
+                  let star2 = stars.first(where: { $0.id == edge.target }) else {
+                return nil
+            }
+            return (star1, star2)
+        }
     }
-    
-    private func drawConstellation(context: GraphicsContext, constellation: Constellation) {
-        // Draw glowing connections between related thoughts
+
+    private func colorForCluster(_ clusterId: String?, clusters: [GraphCluster]?) -> Color {
+        guard let clusterId = clusterId,
+              let cluster = clusters?.first(where: { $0.id == clusterId }) else {
+            return .white
+        }
+        return cluster.swiftUIColor
     }
-    
-    private func drawStar(context: GraphicsContext, star: Star, time: Date) {
-        // Draw pulsing star representing a thought
+
+    private func drawBackgroundStars(context: GraphicsContext, size: CGSize, time: Date) {
+        // Draw ambient background stars
+        let timeValue = time.timeIntervalSinceReferenceDate
+        for i in 0..<150 {
+            let seed = Double(i) * 17.31
+            let x = (sin(seed * 0.7) + 1) / 2 * size.width
+            let y = (cos(seed * 0.9) + 1) / 2 * size.height
+            let twinkle = (sin(timeValue * 2 + seed) + 1) / 2
+
+            let opacity = 0.1 + twinkle * 0.3
+            let starSize = 0.5 + twinkle * 0.5
+
+            context.fill(
+                Circle().path(in: CGRect(x: x - starSize/2, y: y - starSize/2, width: starSize, height: starSize)),
+                with: .color(.white.opacity(opacity))
+            )
+        }
+    }
+
+    private func drawConnectionLine(context: GraphicsContext, from star1: Star, to star2: Star) {
+        var path = Path()
+        path.move(to: star1.position)
+        path.addLine(to: star2.position)
+
+        context.stroke(
+            path,
+            with: .linearGradient(
+                Gradient(colors: [star1.color.opacity(0.3), star2.color.opacity(0.3)]),
+                startPoint: star1.position,
+                endPoint: star2.position
+            ),
+            lineWidth: 0.5
+        )
+    }
+
+    private func drawThoughtStar(context: GraphicsContext, star: Star, time: Date, isSelected: Bool) {
+        let timeValue = time.timeIntervalSinceReferenceDate
+        let pulse = (sin(timeValue * 3 + star.pulsePhase) + 1) / 2
+        let glowSize = star.size * (1.5 + pulse * 0.5) * (isSelected ? 2 : 1)
+        let coreSize = star.size * (isSelected ? 1.5 : 1)
+
+        // Draw glow
+        let glowRect = CGRect(
+            x: star.position.x - glowSize,
+            y: star.position.y - glowSize,
+            width: glowSize * 2,
+            height: glowSize * 2
+        )
+        context.fill(
+            Circle().path(in: glowRect),
+            with: .radialGradient(
+                Gradient(colors: [
+                    star.color.opacity(0.5 * star.brightness),
+                    star.color.opacity(0.1 * star.brightness),
+                    .clear
+                ]),
+                center: star.position,
+                startRadius: 0,
+                endRadius: glowSize
+            )
+        )
+
+        // Draw core
+        let coreRect = CGRect(
+            x: star.position.x - coreSize/2,
+            y: star.position.y - coreSize/2,
+            width: coreSize,
+            height: coreSize
+        )
+        context.fill(
+            Circle().path(in: coreRect),
+            with: .color(.white)
+        )
+    }
+
+    private func selectStar(at location: CGPoint, size: CGSize) {
+        let adjustedLocation = CGPoint(
+            x: (location.x - size.width / 2 - offset.width) / scale + size.width / 2,
+            y: (location.y - size.height / 2 - offset.height) / scale + size.height / 2
+        )
+
+        selectedStarId = stars.first { star in
+            let distance = hypot(star.position.x - adjustedLocation.x, star.position.y - adjustedLocation.y)
+            return distance < star.size * 3
+        }?.id
+    }
+}
+
+// MARK: - Constellation Controls View
+struct ConstellationControlsView: View {
+    let starCount: Int
+    let connectionCount: Int
+    let onRefresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 12) {
+                Label("\(starCount)", systemImage: "star.fill")
+                Label("\(connectionCount)", systemImage: "line.diagonal")
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.7))
+
+            Button(action: onRefresh) {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .tint(.white)
+        }
+        .padding(12)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Star Info Card
+struct StarInfoCard: View {
+    let star: ConstellationView.Star
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Circle()
+                    .fill(star.color)
+                    .frame(width: 12, height: 12)
+                Text("Thought")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+            }
+
+            if !star.tags.isEmpty {
+                HStack {
+                    ForEach(star.tags.prefix(3), id: \.self) { tag in
+                        Text("#\(tag)")
+                            .font(.caption2)
+                            .foregroundStyle(star.color)
+                    }
+                }
+            }
+
+            HStack {
+                Label(String(format: "%.0f%%", star.brightness * 100), systemImage: "sparkles")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .padding(12)
+        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

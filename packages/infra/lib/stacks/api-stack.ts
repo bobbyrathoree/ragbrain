@@ -205,58 +205,10 @@ export class ApiStack extends cdk.Stack {
       authorizer,
     });
 
-    // WAF Web ACL for additional protection
-    const webAcl = new waf.CfnWebACL(this, 'WebAcl', {
-      scope: 'REGIONAL',
-      defaultAction: { allow: {} },
-      visibilityConfig: {
-        sampledRequestsEnabled: true,
-        cloudWatchMetricsEnabled: true,
-        metricName: `${projectName}-${environment}-waf`,
-      },
-      rules: [
-        {
-          name: 'RateLimitRule',
-          priority: 1,
-          statement: {
-            rateBasedStatement: {
-              limit: 2000,
-              aggregateKeyType: 'IP',
-            },
-          },
-          action: { block: {} },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: 'RateLimitRule',
-          },
-        },
-        {
-          name: 'AWSManagedRulesCommonRuleSet',
-          priority: 2,
-          overrideAction: { none: {} },
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesCommonRuleSet',
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: 'CommonRuleSet',
-          },
-        },
-      ],
-    });
-
-    // Associate WAF with API
-    // Construct the stage ARN for HTTP API
-    const stageArn = `arn:aws:apigateway:${this.region}::/apis/${this.api.httpApiId}/stages/${environment}`;
-    new waf.CfnWebACLAssociation(this, 'WebAclAssociation', {
-      resourceArn: stageArn,
-      webAclArn: webAcl.attrArn,
-    });
+    // WAF Web ACL for additional protection (only in prod)
+    // Note: API Gateway HTTP API requires manual ARN construction for WAF association
+    // TODO: Enable WAF for prod deployment
+    // Rate limiting is handled by API Gateway throttling for now
 
     this.apiUrl = stage.url;
 
