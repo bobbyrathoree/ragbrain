@@ -1,8 +1,8 @@
 {
-  "name": "@ultrathink/infra",
+  "name": "@ragbrain/infra",
   "version": "1.0.0",
   "private": true,
-  "description": "AWS CDK infrastructure for Ultrathink",
+  "description": "AWS CDK infrastructure for Ragbrain",
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",

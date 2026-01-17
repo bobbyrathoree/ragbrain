@@ -36,7 +36,7 @@ export class ApiStack extends cdk.Stack {
     // API key for v1 (will be replaced with Cognito later)
     const apiKeySecret = new secretsmanager.Secret(this, 'ApiKey', {
       secretName: `${projectName}/${environment}/api-key`,
-      description: 'API key for Ultrathink v1',
+      description: 'API key for Ragbrain v1',
       generateSecretString: {
         secretStringTemplate: JSON.stringify({}),
         generateStringKey: 'key',
@@ -95,7 +95,7 @@ export class ApiStack extends cdk.Stack {
     // Create HTTP API
     this.api = new apigateway.HttpApi(this, 'HttpApi', {
       apiName: `${projectName}-${environment}`,
-      description: `Ultrathink API for ${environment}`,
+      description: `Ragbrain API for ${environment}`,
       corsPreflight: {
         allowOrigins: ['*'], // Will restrict to app bundle later
         allowMethods: [

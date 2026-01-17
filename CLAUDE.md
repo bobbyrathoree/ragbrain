@@ -1,7 +1,7 @@
-# Ultrathink - Personal Knowledge Management System
+# Ragbrain - Personal Knowledge Management System
 
 ## Project Overview
-Ultrathink is a blazing-fast, local-first note capture and retrieval system for macOS. It enables instant thought capture via hotkeys and provides intelligent, citation-backed answers to questions about your personal knowledge base.
+Ragbrain is a blazing-fast, local-first note capture and retrieval system for macOS. It enables instant thought capture via hotkeys and provides intelligent, citation-backed answers to questions about your personal knowledge base.
 
 ## Core Features
 - **⌥S** - Instant capture of thoughts, code snippets, decisions, and links
@@ -53,7 +53,7 @@ npm run lint
 
 ## Project Structure
 ```
-ultrathink/
+ragbrain/
 ├── apps/
 │   ├── macos/          # Swift/SwiftUI native app
 │   └── web/            # Optional web viewer

@@ -1,14 +1,14 @@
-# Ultrathink Implementation Plan
+# Ragbrain Implementation Plan
 
 ## Overview
-This document outlines the phased implementation approach for Ultrathink, a local-first personal knowledge management system for macOS with AWS backend.
+This document outlines the phased implementation approach for Ragbrain, a local-first personal knowledge management system for macOS with AWS backend.
 
 ## Phase 1: Foundation & Core Capture (Week 1-2)
 
 ### 1.1 Project Setup
 - [ ] Initialize monorepo structure
   ```
-  ultrathink/
+  ragbrain/
   ├── apps/
   │   ├── macos/          # Swift/SwiftUI app
   │   └── web/            # Optional web viewer
@@ -84,8 +84,8 @@ This document outlines the phased implementation approach for Ultrathink, a loca
 
 ### 2.3 Data Storage
 - [ ] Create S3 buckets:
-  - ultrathink-raw (source of truth)
-  - ultrathink-artifacts (processed data)
+  - ragbrain-raw (source of truth)
+  - ragbrain-artifacts (processed data)
 - [ ] Configure DynamoDB table:
   - Partition key: user#userId
   - Sort key: ts#epoch#id

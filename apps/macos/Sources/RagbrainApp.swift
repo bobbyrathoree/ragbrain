@@ -3,7 +3,7 @@ import KeyboardShortcuts
 import CoreData
 
 @main
-struct UltrathinkApp: App {
+struct RagbrainApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var captureManager = CaptureManager()
     @StateObject private var askManager = AskManager()
@@ -57,7 +57,7 @@ struct UltrathinkApp: App {
                 .environmentObject(apiConfiguration)
         }
 
-        MenuBarExtra("Ultrathink", systemImage: "brain") {
+        MenuBarExtra("Ragbrain", systemImage: "brain") {
             MenuBarView()
                 .environmentObject(captureManager)
                 .environmentObject(askManager)

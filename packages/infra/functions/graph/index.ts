@@ -11,7 +11,7 @@ import {
   GraphResponse, 
   GraphNode, 
   GraphEdge 
-} from '@ultrathink/shared';
+} from '@ragbrain/shared';
 
 const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});

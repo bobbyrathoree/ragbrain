@@ -10,7 +10,7 @@ import { MonitoringStack } from './stacks/monitoring-stack';
 const app = new cdk.App();
 
 const env = app.node.tryGetContext('env') || 'dev';
-const project = 'ultrathink';
+const project = 'ragbrain';
 
 const stackProps = {
   env: {

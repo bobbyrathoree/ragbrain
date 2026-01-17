@@ -15,7 +15,7 @@ cd nodejs
 npm install --production
 
 # Copy shared package build output
-cp -r ../../../../shared/dist/* node_modules/@ultrathink/shared/
+cp -r ../../../../shared/dist/* node_modules/@ragbrain/shared/
 
 # Remove unnecessary files to reduce layer size
 find node_modules -name "*.md" -delete

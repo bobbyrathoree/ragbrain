@@ -28,13 +28,13 @@ export class MonitoringStack extends cdk.Stack {
     // SNS topic for alarms
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', {
       topicName: `${projectName}-alarms-${environment}`,
-      displayName: `Ultrathink ${environment} Alarms`,
+      displayName: `Ragbrain ${environment} Alarms`,
     });
 
     // Add email subscription (replace with your email)
     if (environment === 'prod') {
       this.alarmTopic.addSubscription(
-        new snsSubscriptions.EmailSubscription('alerts@ultrathink.dev')
+        new snsSubscriptions.EmailSubscription('alerts@ragbrain.dev')
       );
     }
 

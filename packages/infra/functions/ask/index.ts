@@ -10,7 +10,7 @@ import {
   Citation,
   parseTimeWindow,
   calculateRecencyScore,
-} from '@ultrathink/shared';
+} from '@ragbrain/shared';
 
 const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION });
 const cloudwatch = new CloudWatchClient({});

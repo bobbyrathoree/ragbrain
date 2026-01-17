@@ -139,7 +139,7 @@ struct HotkeySettingsTab: View {
             } header: {
                 Text("Global Shortcuts")
             } footer: {
-                Text("These shortcuts work even when Ultrathink is in the background.")
+                Text("These shortcuts work even when Ragbrain is in the background.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

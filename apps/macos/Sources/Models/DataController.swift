@@ -5,7 +5,7 @@ class DataController: ObservableObject {
     let container: NSPersistentContainer
     
     init() {
-        container = NSPersistentContainer(name: "Ultrathink")
+        container = NSPersistentContainer(name: "Ragbrain")
         
         container.persistentStoreDescriptions.forEach { storeDescription in
             storeDescription.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)

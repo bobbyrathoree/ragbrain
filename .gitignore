@@ -105,7 +105,7 @@ tmp/
 temp/
 
 # Local configuration (contains API URLs and keys)
-.ultrathink/
+.ragbrain/
 **/config.local
 
 # Database

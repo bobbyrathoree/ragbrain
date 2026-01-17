@@ -67,7 +67,7 @@ struct MenuBarView: View {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 // Open main window
             } label: {
-                Label("Open Ultrathink", systemImage: "brain")
+                Label("Open Ragbrain", systemImage: "brain")
             }
 
             SettingsLink {
@@ -79,7 +79,7 @@ struct MenuBarView: View {
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Text("Quit Ultrathink")
+                Text("Quit Ragbrain")
             }
             .keyboardShortcut("q")
         }

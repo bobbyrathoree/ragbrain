@@ -3,14 +3,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "Ultrathink",
+    name: "Ragbrain",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "Ultrathink",
-            targets: ["Ultrathink"]
+            name: "Ragbrain",
+            targets: ["Ragbrain"]
         )
     ],
     dependencies: [
@@ -19,19 +19,19 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Ultrathink",
+            name: "Ragbrain",
             dependencies: [
                 "KeyboardShortcuts",
                 .product(name: "Markdown", package: "swift-markdown")
             ],
             path: "Sources",
             resources: [
-                .process("Models/Ultrathink.xcdatamodeld")
+                .process("Models/Ragbrain.xcdatamodeld")
             ]
         ),
         .testTarget(
-            name: "UltrathinkTests",
-            dependencies: ["Ultrathink"],
+            name: "RagbrainTests",
+            dependencies: ["Ragbrain"],
             path: "Tests"
         )
     ]

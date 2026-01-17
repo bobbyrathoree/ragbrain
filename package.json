@@ -1,5 +1,5 @@
 {
-  "name": "ultrathink",
+  "name": "ragbrain",
   "version": "1.0.0",
   "private": true,
   "description": "Personal knowledge management system with blazing-fast capture and intelligent retrieval",
@@ -12,9 +12,9 @@
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "typecheck": "npm run typecheck --workspaces",
-    "dev:web": "npm run dev -w @ultrathink/web",
-    "dev:api": "npm run dev -w @ultrathink/api",
-    "deploy:infra": "npm run deploy -w @ultrathink/infra",
+    "dev:web": "npm run dev -w @ragbrain/web",
+    "dev:api": "npm run dev -w @ragbrain/api",
+    "deploy:infra": "npm run deploy -w @ragbrain/infra",
     "clean": "npm run clean --workspaces"
   },
   "devDependencies": {

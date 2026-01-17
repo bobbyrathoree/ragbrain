@@ -7,7 +7,7 @@ import {
   ThoughtsResponse,
   Thought,
   ThoughtType,
-} from '@ultrathink/shared';
+} from '@ragbrain/shared';
 
 const dynamodb = new DynamoDBClient({});
 const cloudwatch = new CloudWatchClient({});

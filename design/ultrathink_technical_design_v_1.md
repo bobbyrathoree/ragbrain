@@ -1,4 +1,4 @@
-# Ultrathink — Personal Memory & Recall
+# Ragbrain — Personal Memory & Recall
 
 **Status:** Draft v1 • **Platform:** macOS client + AWS backend • **Scope:** Single-user (no auth for v1) • **Hotkeys:** ⌥S (capture), ⌥F (ask)
 
@@ -7,7 +7,7 @@
 ---
 
 ## 0. executive summary
-Ultrathink is a local-first, blazing-fast notes capture + recall system. You press **⌥S** to capture a thought, code, link, or tag; it saves offline instantly and syncs to AWS where it is chunked, embedded, and indexed for retrieval. You press **⌥F** to ask questions (e.g., *“why did I do this?”*); Ultrathink returns a concise answer **with timestamped citations** of the exact notes that justify it. The app also provides a **timeline** and a **graph** view that make clusters of ideas obvious.
+Ragbrain is a local-first, blazing-fast notes capture + recall system. You press **⌥S** to capture a thought, code, link, or tag; it saves offline instantly and syncs to AWS where it is chunked, embedded, and indexed for retrieval. You press **⌥F** to ask questions (e.g., *"why did I do this?"*); Ragbrain returns a concise answer **with timestamped citations** of the exact notes that justify it. The app also provides a **timeline** and a **graph** view that make clusters of ideas obvious.
 
 We optimize for: (1) sub‑150ms local capture, (2) trustworthy, citation‑first recall, (3) future‑proof security seams.
 
@@ -59,7 +59,7 @@ Graph view → /graph → Lambda: graph-builder (kNN edges, UMAP layout) → S3 
 ### 4.1 macOS app (SwiftUI + AppKit)
 - **Global hotkeys**: ⌥S opens capture sheet; ⌥F opens ask sheet. Implemented via NSEvent global monitors + a small event tap. The sheet is a borderless, centered window with a blurred background.
 - **Capture sheet**: Markdown editor with fenced code blocks, inline tags (`#tag`), and flags (`!todo`, `!idea`, `!decision`). Shows character count and a local‑save ✅.
-- **Local store**: Core Data over SQLite (`ultrathink.db`). Tables: `notes`, `outbox`, `settings`. DB is encrypted with a key stored in Keychain.
+- **Local store**: Core Data over SQLite (`ragbrain.db`). Tables: `notes`, `outbox`, `settings`. DB is encrypted with a key stored in Keychain.
 - **Context capture (optional)**: with Accessibility permission, store frontmost app + title; attempt to read repo/branch when VS Code/Xcode is active (AppleScript/CLI). User‑toggleable.
 - **Sync agent**: background task that drains `outbox` to `/thoughts`, exponential backoff, idempotency (client‑generated `id`).
 - **Ask sheet**: simple input → calls `/ask` → renders structured answer (summary + citations list) with tap‑to‑expand items opening the full note in the main app.
@@ -70,7 +70,7 @@ Graph view → /graph → Lambda: graph-builder (kNN edges, UMAP layout) → S3 
 - For v1, use a static **API key** in the app bundle (stored in Keychain); later replace with Cognito/IdC. CORS locked to the app’s bundle; TLS required.
 
 ### 4.3 Data ingestion
-- **capture (Lambda)**: Validates payload, writes raw JSON to `s3://ultrathink-raw/{date}/{id}.json` (SSE‑KMS), writes a minimal row to DynamoDB (`thoughts`) and enqueues the S3 key to SQS.
+- **capture (Lambda)**: Validates payload, writes raw JSON to `s3://ragbrain-raw/{date}/{id}.json` (SSE‑KMS), writes a minimal row to DynamoDB (`thoughts`) and enqueues the S3 key to SQS.
 - **indexer (Lambda)**: Reads S3 JSON; cleans/normalizes text; detects secrets (regex entropy); masks before proceed; computes **Titan Embeddings** (Bedrock); writes `embedding + metadata` to **OpenSearch Serverless** (`notes` index); updates DynamoDB with derived fields (summary, auto‑tags, decision_score, embedding_id). Idempotent via `id` + content hash.
 
 ### 4.4 Retrieval & generation
@@ -85,7 +85,7 @@ Graph view → /graph → Lambda: graph-builder (kNN edges, UMAP layout) → S3 
 
 ### 4.5 Graph builder
 - On capture or nightly, compute **k‑NN edges** for new notes (cosine ≥ 0.78).
-- Run UMAP (or t‑SNE) in a small batch Lambda to derive 2D coordinates. Store as `s3://ultrathink-artifacts/graph/YYYY-MM.json` (nodes: id, x,y, tags, recency; edges: id1,id2,sim).
+- Run UMAP (or t‑SNE) in a small batch Lambda to derive 2D coordinates. Store as `s3://ragbrain-artifacts/graph/YYYY-MM.json` (nodes: id, x,y, tags, recency; edges: id1,id2,sim).
 - Client streams this JSON to render an interactive graph (pan/zoom, hover previews, filter chips).
 
 ---

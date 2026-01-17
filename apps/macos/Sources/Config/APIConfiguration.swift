@@ -1,14 +1,14 @@
 import Foundation
 import Security
 
-/// Centralized API configuration for Ultrathink
+/// Centralized API configuration for Ragbrain
 final class APIConfiguration: ObservableObject {
     static let shared = APIConfiguration()
 
     /// API endpoint URL - update after CDK deployment
     @Published var baseURL: String {
         didSet {
-            UserDefaults.standard.set(baseURL, forKey: "ultrathink.apiBaseURL")
+            UserDefaults.standard.set(baseURL, forKey: "ragbrain.apiBaseURL")
         }
     }
 
@@ -35,7 +35,7 @@ final class APIConfiguration: ObservableObject {
             // Development: relative to source
             URL(fileURLWithPath: #file).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".env.local"),
             // Home directory fallback
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".ultrathink/config")
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".ragbrain/config")
         ]
 
         for path in possiblePaths {
@@ -51,25 +51,25 @@ final class APIConfiguration: ObservableObject {
     }
 
     private init() {
-        self.baseURL = UserDefaults.standard.string(forKey: "ultrathink.apiBaseURL") ?? Self.defaultBaseURL
-        self.hasAPIKey = KeychainHelper.load(key: "ultrathink-api-key") != nil
+        self.baseURL = UserDefaults.standard.string(forKey: "ragbrain.apiBaseURL") ?? Self.defaultBaseURL
+        self.hasAPIKey = KeychainHelper.load(key: "ragbrain-api-key") != nil
     }
 
     /// Get the API key from Keychain
     var apiKey: String? {
-        KeychainHelper.load(key: "ultrathink-api-key")
+        KeychainHelper.load(key: "ragbrain-api-key")
     }
 
     /// Store API key in Keychain
     func setAPIKey(_ key: String) -> Bool {
-        let success = KeychainHelper.save(key: "ultrathink-api-key", value: key)
+        let success = KeychainHelper.save(key: "ragbrain-api-key", value: key)
         hasAPIKey = success
         return success
     }
 
     /// Remove API key from Keychain
     func clearAPIKey() {
-        KeychainHelper.delete(key: "ultrathink-api-key")
+        KeychainHelper.delete(key: "ragbrain-api-key")
         hasAPIKey = false
     }
 
@@ -102,7 +102,7 @@ final class APIConfiguration: ObservableObject {
 
 // MARK: - Keychain Helper
 enum KeychainHelper {
-    private static let serviceName = "com.ultrathink.app"
+    private static let serviceName = "com.ragbrain.app"
 
     static func save(key: String, value: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }

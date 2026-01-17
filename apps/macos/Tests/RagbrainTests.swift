@@ -1,12 +1,12 @@
 import XCTest
-@testable import Ultrathink
+@testable import Ragbrain
 
-final class UltrathinkTests: XCTestCase {
+final class RagbrainTests: XCTestCase {
     func testCaptureContextEncoding() throws {
         let context = CaptureContext(
             app: "VS Code",
             windowTitle: "main.swift",
-            repo: "ultrathink",
+            repo: "ragbrain",
             branch: "main",
             file: "Sources/main.swift"
         )
@@ -17,7 +17,7 @@ final class UltrathinkTests: XCTestCase {
         let decoded = CaptureContext.fromData(data!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.app, "VS Code")
-        XCTAssertEqual(decoded?.repo, "ultrathink")
+        XCTAssertEqual(decoded?.repo, "ragbrain")
     }
 
     func testThoughtTypeRawValues() {

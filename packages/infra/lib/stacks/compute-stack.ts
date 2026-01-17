@@ -84,12 +84,12 @@ export class ComputeStack extends cdk.Stack {
       ],
       // Use local esbuild if available, otherwise Docker
       forceDockerBundling: false,
-      // Add path aliases to resolve @ultrathink/shared
+      // Add path aliases to resolve @ragbrain/shared
       define: {
         'process.env.NODE_ENV': JSON.stringify(environment),
       },
       esbuildArgs: {
-        '--alias:@ultrathink/shared': path.join(__dirname, '../../../shared/src'),
+        '--alias:@ragbrain/shared': path.join(__dirname, '../../../shared/src'),
       },
     };
 
