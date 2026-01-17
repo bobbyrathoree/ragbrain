@@ -90,7 +90,17 @@ struct DerivedFields: Codable {
     let summary: String?
     let decisionScore: Double?
     let autoTags: [String]?
+    let category: String?
+    let intent: String?
+    let entities: [String]?
+    let relatedIds: [String]?
     let importance: Double?
+}
+
+struct RelatedThoughtsResponse: Codable {
+    let thoughtId: String
+    let related: [ThoughtResponse]
+    let count: Int
 }
 
 struct ThoughtsListResponse: Codable {
@@ -152,6 +162,36 @@ class ThoughtsAPIClient {
             return try JSONDecoder().decode(ThoughtsListResponse.self, from: data)
         case 401:
             throw ThoughtsError.unauthorized
+        default:
+            throw ThoughtsError.serverError(httpResponse.statusCode)
+        }
+    }
+
+    func fetchRelatedThoughts(thoughtId: String) async throws -> RelatedThoughtsResponse {
+        guard !apiKey.isEmpty else {
+            throw ThoughtsError.unauthorized
+        }
+
+        let url = URL(string: "\(baseURL)/thoughts/\(thoughtId)/related")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ThoughtsError.networkError
+        }
+
+        switch httpResponse.statusCode {
+        case 200:
+            return try JSONDecoder().decode(RelatedThoughtsResponse.self, from: data)
+        case 401:
+            throw ThoughtsError.unauthorized
+        case 404:
+            return RelatedThoughtsResponse(thoughtId: thoughtId, related: [], count: 0)
         default:
             throw ThoughtsError.serverError(httpResponse.statusCode)
         }

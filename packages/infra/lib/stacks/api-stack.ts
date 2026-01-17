@@ -15,6 +15,7 @@ interface ApiStackProps extends cdk.StackProps {
   askLambda: lambda.Function;
   thoughtsLambda: lambda.Function;
   graphLambda: lambda.Function;
+  conversationsLambda: lambda.Function;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -31,6 +32,7 @@ export class ApiStack extends cdk.Stack {
       askLambda,
       thoughtsLambda,
       graphLambda,
+      conversationsLambda,
     } = props;
 
     // API key for v1 (will be replaced with Cognito later)
@@ -183,6 +185,17 @@ export class ApiStack extends cdk.Stack {
       authorizer,
     });
 
+    // GET /thoughts/{id}/related - Get related thoughts
+    this.api.addRoutes({
+      path: '/thoughts/{id}/related',
+      methods: [apigateway.HttpMethod.GET],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'RelatedThoughtsIntegration',
+        thoughtsLambda
+      ),
+      authorizer,
+    });
+
     // POST /ask - Ask questions
     this.api.addRoutes({
       path: '/ask',
@@ -201,6 +214,44 @@ export class ApiStack extends cdk.Stack {
       integration: new apigatewayIntegrations.HttpLambdaIntegration(
         'GraphIntegration',
         graphLambda
+      ),
+      authorizer,
+    });
+
+    // Conversation routes
+
+    // POST /conversations - Create conversation
+    // GET /conversations - List conversations
+    this.api.addRoutes({
+      path: '/conversations',
+      methods: [apigateway.HttpMethod.POST, apigateway.HttpMethod.GET],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'ConversationsIntegration',
+        conversationsLambda
+      ),
+      authorizer,
+    });
+
+    // GET /conversations/{id} - Get conversation with messages
+    // PUT /conversations/{id} - Update conversation
+    // DELETE /conversations/{id} - Delete conversation
+    this.api.addRoutes({
+      path: '/conversations/{id}',
+      methods: [apigateway.HttpMethod.GET, apigateway.HttpMethod.PUT, apigateway.HttpMethod.DELETE],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'ConversationDetailIntegration',
+        conversationsLambda
+      ),
+      authorizer,
+    });
+
+    // POST /conversations/{id}/messages - Send message
+    this.api.addRoutes({
+      path: '/conversations/{id}/messages',
+      methods: [apigateway.HttpMethod.POST],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'ConversationMessagesIntegration',
+        conversationsLambda
       ),
       authorizer,
     });

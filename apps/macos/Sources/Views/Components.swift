@@ -304,37 +304,139 @@ struct FilterBar: View {
 // MARK: - Related Thoughts Carousel
 struct RelatedThoughtsCarousel: View {
     let thought: Thought
+    @State private var relatedThoughts: [ThoughtResponse] = []
+    @State private var isLoading = false
+
+    private let apiClient = ThoughtsAPIClient()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Related")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Label("Related Thoughts", systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(0..<3) { _ in
-                        RelatedThoughtCard()
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                }
+            }
+
+            if relatedThoughts.isEmpty && !isLoading {
+                Text("No related thoughts found")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(relatedThoughts) { related in
+                            RelatedThoughtCard(thought: related)
+                        }
                     }
                 }
             }
         }
+        .task {
+            await loadRelatedThoughts()
+        }
+    }
+
+    private func loadRelatedThoughts() async {
+        guard let thoughtId = thought.id?.uuidString else { return }
+        isLoading = true
+
+        do {
+            let response = try await apiClient.fetchRelatedThoughts(thoughtId: thoughtId)
+            relatedThoughts = response.related
+        } catch {
+            print("Failed to load related thoughts: \(error)")
+        }
+
+        isLoading = false
+    }
+}
+
+// MARK: - Related Thoughts Carousel (API Response version)
+struct RelatedThoughtsCarouselAPI: View {
+    let thoughtId: String
+    @State private var relatedThoughts: [ThoughtResponse] = []
+    @State private var isLoading = false
+
+    private let apiClient = ThoughtsAPIClient()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Related Thoughts", systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                }
+            }
+
+            if relatedThoughts.isEmpty && !isLoading {
+                Text("No related thoughts found")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(relatedThoughts) { related in
+                            RelatedThoughtCard(thought: related)
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            await loadRelatedThoughts()
+        }
+    }
+
+    private func loadRelatedThoughts() async {
+        isLoading = true
+
+        do {
+            let response = try await apiClient.fetchRelatedThoughts(thoughtId: thoughtId)
+            relatedThoughts = response.related
+        } catch {
+            print("Failed to load related thoughts: \(error)")
+        }
+
+        isLoading = false
     }
 }
 
 struct RelatedThoughtCard: View {
+    let thought: ThoughtResponse
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Related thought...")
+            Text(thought.text)
                 .font(.caption)
                 .lineLimit(2)
 
-            Text("85% similar")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            HStack {
+                if let category = thought.derived?.category {
+                    Text(category)
+                        .font(.caption2)
+                        .foregroundStyle(.purple)
+                }
+
+                Spacer()
+
+                if let date = thought.createdAtDate {
+                    Text(date, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
         .padding(8)
-        .frame(width: 120)
+        .frame(width: 160)
         .background(Color.secondary.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }

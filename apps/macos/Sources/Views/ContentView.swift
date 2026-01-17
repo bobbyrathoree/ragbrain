@@ -683,6 +683,8 @@ struct IntelligentFeedView: View {
         case chronological = "Timeline"
         case topics = "Topics"
         case importance = "Priority"
+        case category = "Category"
+        case intent = "Intent"
     }
 
     struct ThoughtGroup: Identifiable {
@@ -780,6 +782,10 @@ struct IntelligentFeedView: View {
             return groupByDate(thoughts)
         case .importance:
             return groupByImportance(thoughts)
+        case .category:
+            return groupByCategory(thoughts)
+        case .intent:
+            return groupByIntent(thoughts)
         }
     }
 
@@ -844,6 +850,62 @@ struct IntelligentFeedView: View {
         if !low.isEmpty { groups.append(ThoughtGroup(id: "low", key: "Notes", thoughts: low)) }
         return groups
     }
+
+    private func groupByCategory(_ thoughts: [ThoughtResponse]) -> [ThoughtGroup] {
+        var groups: [String: [ThoughtResponse]] = [:]
+
+        for thought in thoughts {
+            let key = thought.derived?.category ?? "other"
+            groups[key, default: []].append(thought)
+        }
+
+        let order = ["engineering", "design", "product", "personal", "learning", "decision", "other"]
+        return order.compactMap { key in
+            guard let thoughts = groups[key], !thoughts.isEmpty else { return nil }
+            return ThoughtGroup(id: key, key: categoryDisplayName(key), thoughts: thoughts)
+        }
+    }
+
+    private func categoryDisplayName(_ category: String) -> String {
+        switch category {
+        case "engineering": return "Engineering"
+        case "design": return "Design"
+        case "product": return "Product"
+        case "personal": return "Personal"
+        case "learning": return "Learning"
+        case "decision": return "Decisions"
+        default: return "Other"
+        }
+    }
+
+    private func groupByIntent(_ thoughts: [ThoughtResponse]) -> [ThoughtGroup] {
+        var groups: [String: [ThoughtResponse]] = [:]
+
+        for thought in thoughts {
+            let key = thought.derived?.intent ?? "note"
+            groups[key, default: []].append(thought)
+        }
+
+        let order = ["decision", "todo", "idea", "question", "feature-request", "bug-report", "note", "rationale"]
+        return order.compactMap { key in
+            guard let thoughts = groups[key], !thoughts.isEmpty else { return nil }
+            return ThoughtGroup(id: key, key: intentDisplayName(key), thoughts: thoughts)
+        }
+    }
+
+    private func intentDisplayName(_ intent: String) -> String {
+        switch intent {
+        case "note": return "Notes"
+        case "question": return "Questions"
+        case "decision": return "Decisions"
+        case "todo": return "To-dos"
+        case "idea": return "Ideas"
+        case "bug-report": return "Bug Reports"
+        case "feature-request": return "Feature Requests"
+        case "rationale": return "Rationale"
+        default: return "Other"
+        }
+    }
 }
 
 // MARK: - Thought Response Card (for API data)
@@ -858,16 +920,36 @@ struct ThoughtResponseCard: View {
                 .foregroundStyle(.tint)
                 .frame(width: 32)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
+                // Category/Intent badges
+                if let category = thought.derived?.category, let intent = thought.derived?.intent {
+                    HStack(spacing: 6) {
+                        CategoryBadge(category: category)
+                        IntentBadge(intent: intent)
+                    }
+                }
+
                 Text(thought.text)
                     .font(.body)
                     .lineLimit(3)
 
-                HStack {
+                // Tags section
+                HStack(spacing: 4) {
+                    // User tags (blue)
                     ForEach(thought.tags.prefix(3), id: \.self) { tag in
                         Text("#\(tag)")
                             .font(.caption2)
                             .foregroundStyle(.blue)
+                    }
+
+                    // AI auto-tags (purple, italic)
+                    if let autoTags = thought.derived?.autoTags {
+                        ForEach(autoTags.prefix(2), id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.caption2)
+                                .italic()
+                                .foregroundStyle(.purple)
+                        }
                     }
 
                     Spacer()
@@ -876,6 +958,20 @@ struct ThoughtResponseCard: View {
                         Text(date, style: .relative)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+                    }
+                }
+
+                // Entities if present
+                if let entities = thought.derived?.entities, !entities.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(entities.prefix(3), id: \.self) { entity in
+                            Text(entity)
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(Capsule())
+                        }
                     }
                 }
             }
@@ -893,6 +989,67 @@ struct ThoughtResponseCard: View {
         case "todo": return "checklist"
         case "rationale": return "lightbulb"
         default: return "note.text"
+        }
+    }
+}
+
+// MARK: - Category Badge
+struct CategoryBadge: View {
+    let category: String
+
+    var body: some View {
+        Text(category.capitalized)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(colorForCategory(category))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(colorForCategory(category).opacity(0.15))
+            .clipShape(Capsule())
+    }
+
+    private func colorForCategory(_ category: String) -> Color {
+        switch category {
+        case "engineering": return .blue
+        case "design": return .pink
+        case "product": return .orange
+        case "personal": return .green
+        case "learning": return .purple
+        case "decision": return .red
+        default: return .secondary
+        }
+    }
+}
+
+// MARK: - Intent Badge
+struct IntentBadge: View {
+    let intent: String
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: iconForIntent(intent))
+                .font(.caption2)
+            Text(intent.replacingOccurrences(of: "-", with: " ").capitalized)
+                .font(.caption2)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.secondary.opacity(0.1))
+        .clipShape(Capsule())
+    }
+
+    private func iconForIntent(_ intent: String) -> String {
+        switch intent {
+        case "note": return "note.text"
+        case "question": return "questionmark.circle"
+        case "decision": return "arrow.triangle.branch"
+        case "todo": return "checklist"
+        case "idea": return "lightbulb"
+        case "bug-report": return "ladybug"
+        case "feature-request": return "star"
+        case "rationale": return "text.quote"
+        default: return "doc"
         }
     }
 }

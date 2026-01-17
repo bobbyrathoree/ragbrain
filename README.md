@@ -2,7 +2,7 @@
 
 **A blazing-fast, local-first personal knowledge management system for macOS.**
 
-Capture thoughts instantly with global hotkeys. Ask questions and get citation-backed answers from your own knowledge base. Explore your ideas through beautiful 3D visualizations.
+Capture thoughts instantly with global hotkeys. Ask questions and get citation-backed answers from your own knowledge base. Have multi-turn conversations with encrypted history. Explore your ideas through beautiful 3D visualizations.
 
 ![macOS](https://img.shields.io/badge/macOS-14.0+-black?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange?logo=swift)
@@ -13,21 +13,36 @@ Capture thoughts instantly with global hotkeys. Ask questions and get citation-b
 
 ## Features
 
-### ⚡ Instant Capture
+### Instant Capture
 - **⌥S** — Capture thoughts, code snippets, decisions, and links in under 150ms
 - Auto-captures context: active app, window title, git repo, branch, file path
 - Works offline with background sync
 
-### 🔍 Intelligent Ask
+### Intelligent Ask
 - **⌥F** — Ask questions about your captured knowledge
 - Hybrid search: BM25 keyword matching + semantic embeddings
 - Every answer includes timestamped citations to source notes
 
-### 🌌 Visual Exploration
+### Multi-Turn Conversations
+- Have back-and-forth conversations with follow-up questions
+- Full conversation history with context maintained
+- **End-to-end encrypted** — Messages encrypted with KMS before storage
+- Conversations become searchable knowledge
+
+### AI-Powered Intelligence
+- **Smart Auto-Tagging** — Claude analyzes each thought and extracts:
+  - Semantic tags (3-5 per thought)
+  - Category (engineering, design, product, personal, learning, decision)
+  - Intent (note, question, decision, todo, idea, bug-report, feature-request)
+  - Named entities (technologies, people, concepts)
+- **Related Thoughts** — k-NN vector similarity finds connected ideas
+- **Summaries** — Automatic summarization of longer notes
+
+### Visual Exploration
 - **3D Hypergraph** — Navigate your knowledge as an interactive node graph
 - **Constellation View** — See thoughts as a twinkling starfield grouped by topic
 - **Timeline Heatmap** — Visualize capture density over time
-- **Smart Feed** — AI-grouped thoughts by topic, date, or importance
+- **Smart Feed** — AI-grouped thoughts by topic, date, category, or importance
 
 ---
 
@@ -50,29 +65,260 @@ Capture thoughts instantly with global hotkeys. Ask questions and get citation-b
 │                     AWS Backend                               │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │                   API Gateway                            │ │
-│  └──────┬──────────┬──────────┬──────────┬─────────────────┘ │
-│         │          │          │          │                    │
-│    ┌────▼───┐ ┌────▼───┐ ┌────▼───┐ ┌────▼───┐               │
-│    │Capture │ │  Ask   │ │Thoughts│ │ Graph  │   Lambda      │
-│    │Lambda  │ │ Lambda │ │ Lambda │ │ Lambda │               │
-│    └────┬───┘ └────┬───┘ └────┬───┘ └────┬───┘               │
-│         │          │          │          │                    │
-│    ┌────▼──────────▼──────────▼──────────▼───┐               │
-│    │              DynamoDB                    │               │
-│    │         (thoughts table)                 │               │
-│    └─────────────────┬───────────────────────┘               │
-│                      │                                        │
-│    ┌─────────────────▼───────────────────────┐               │
-│    │       OpenSearch Serverless              │               │
-│    │    (embeddings + hybrid search)          │               │
-│    └─────────────────────────────────────────┘               │
-│                                                               │
-│    ┌─────────────────────────────────────────┐               │
-│    │           AWS Bedrock                    │               │
-│    │   (Claude for embeddings + answers)      │               │
-│    └─────────────────────────────────────────┘               │
-└───────────────────────────────────────────────────────────────┘
+│  └──┬──────┬──────┬──────┬──────┬──────┬─────────────────┘ │
+│     │      │      │      │      │      │                     │
+│  ┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼───────┐           │
+│  │Capt-││ Ask ││Thou-││Graph││Index││Conversa- │  Lambda    │
+│  │ure  ││     ││ghts ││     ││er   ││tions     │            │
+│  └──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬───────┘           │
+│     │      │      │      │      │      │                     │
+│  ┌──▼──────▼──────▼──────▼──────▼──────▼───┐               │
+│  │              DynamoDB                    │               │
+│  │    (thoughts + conversations)            │ KMS Encrypted │
+│  └─────────────────┬───────────────────────┘               │
+│                    │                                        │
+│  ┌─────────────────▼───────────────────────┐               │
+│  │       OpenSearch Serverless              │               │
+│  │    (embeddings + hybrid search)          │               │
+│  └─────────────────────────────────────────┘               │
+│                                                             │
+│  ┌─────────────────────────────────────────┐               │
+│  │           AWS Bedrock                    │               │
+│  │  Claude Sonnet 4.5 (answers)             │               │
+│  │  Claude Haiku 4.5 (tagging/summaries)    │               │
+│  │  Titan (embeddings)                      │               │
+│  └─────────────────────────────────────────┘               │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## API Reference
+
+Base URL: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`
+
+All endpoints require `x-api-key` header.
+
+### Thoughts
+
+#### Capture Thought
+```http
+POST /thoughts
+Content-Type: application/json
+
+{
+  "text": "Use Redis caching for frequently accessed endpoints",
+  "type": "note",
+  "tags": ["performance", "redis"],
+  "context": {
+    "app": "VSCode",
+    "repo": "myproject",
+    "file": "src/cache.ts"
+  }
+}
+```
+
+Response:
+```json
+{
+  "id": "t_abc123",
+  "createdAt": "2026-01-17T15:00:00.000Z"
+}
+```
+
+#### List Thoughts
+```http
+GET /thoughts?limit=50&type=note&tag=redis&from=2026-01-01&to=2026-01-31
+```
+
+Response includes AI-derived fields:
+```json
+{
+  "thoughts": [{
+    "id": "t_abc123",
+    "text": "Use Redis caching...",
+    "type": "note",
+    "tags": ["performance", "redis"],
+    "derived": {
+      "summary": "Implement Redis caching for performance",
+      "autoTags": ["caching", "performance-optimization"],
+      "category": "engineering",
+      "intent": "decision",
+      "entities": ["Redis"],
+      "relatedIds": ["t_def456", "t_ghi789"]
+    }
+  }],
+  "cursor": "...",
+  "hasMore": true
+}
+```
+
+#### Get Related Thoughts
+```http
+GET /thoughts/{id}/related
+```
+
+Returns thoughts connected by semantic similarity.
+
+### Ask
+
+#### Ask a Question
+```http
+POST /ask
+Content-Type: application/json
+
+{
+  "query": "What have I noted about caching?",
+  "timeWindow": "90d",
+  "tags": ["performance"]
+}
+```
+
+Response:
+```json
+{
+  "answer": "Based on your notes, you implemented Redis caching for frequently accessed endpoints, achieving a 10x response time improvement [1].",
+  "citations": [{
+    "id": "t_abc123",
+    "createdAt": "2026-01-17T15:00:00.000Z",
+    "preview": "Use Redis caching...",
+    "score": 0.89,
+    "type": "note",
+    "tags": ["performance", "redis"]
+  }],
+  "confidence": 0.87,
+  "processingTime": 3200
+}
+```
+
+### Conversations
+
+#### Create Conversation
+```http
+POST /conversations
+Content-Type: application/json
+
+{
+  "title": "API Design Discussion",
+  "initialMessage": "What patterns have I used for APIs?"
+}
+```
+
+Response:
+```json
+{
+  "id": "conv_xyz789",
+  "title": "API Design Discussion",
+  "createdAt": "2026-01-17T16:00:00.000Z",
+  "messages": [
+    {"role": "user", "content": "What patterns have I used for APIs?"},
+    {"role": "assistant", "content": "Based on your notes...", "citations": [...]}
+  ]
+}
+```
+
+#### Send Message (with follow-up context)
+```http
+POST /conversations/{id}/messages
+Content-Type: application/json
+
+{
+  "content": "Tell me more about the caching approach",
+  "includeHistory": 10
+}
+```
+
+Response:
+```json
+{
+  "userMessage": {
+    "id": "msg_abc",
+    "role": "user",
+    "content": "Tell me more about the caching approach",
+    "createdAt": "2026-01-17T16:05:00.000Z"
+  },
+  "assistantMessage": {
+    "id": "msg_def",
+    "role": "assistant",
+    "content": "You implemented Redis caching and achieved exactly a 10x improvement [1]...",
+    "citations": [...],
+    "confidence": 0.95,
+    "createdAt": "2026-01-17T16:05:03.000Z"
+  },
+  "processingTime": 3400
+}
+```
+
+#### List Conversations
+```http
+GET /conversations?status=active&limit=20
+```
+
+#### Get Conversation with Messages
+```http
+GET /conversations/{id}
+```
+
+#### Update Conversation
+```http
+PUT /conversations/{id}
+Content-Type: application/json
+
+{"title": "New Title", "status": "archived"}
+```
+
+#### Delete Conversation
+```http
+DELETE /conversations/{id}
+```
+
+### Graph
+
+#### Get Visualization Data
+```http
+GET /graph?month=2026-01
+```
+
+Response:
+```json
+{
+  "nodes": [{
+    "id": "t_abc123",
+    "x": 0.5, "y": 0.3, "z": 0.8,
+    "tags": ["redis", "caching"],
+    "recency": 0.9,
+    "importance": 0.7,
+    "type": "note",
+    "clusterId": "cluster_1"
+  }],
+  "edges": [{
+    "source": "t_abc123",
+    "target": "t_def456",
+    "similarity": 0.85
+  }],
+  "clusters": [{
+    "id": "cluster_1",
+    "label": "Performance",
+    "color": "#3b82f6",
+    "nodeIds": ["t_abc123", "t_def456"]
+  }]
+}
+```
+
+---
+
+## Security
+
+### Encryption
+
+- **At Rest**: All DynamoDB data encrypted with customer-managed KMS keys
+- **Conversations**: Application-level encryption with KMS encryption context
+- **In Transit**: TLS 1.2+ for all API calls
+- **S3**: Server-side encryption with KMS
+
+### Authentication
+
+Currently uses API key authentication. Cognito integration planned for multi-user support.
 
 ---
 
@@ -114,7 +360,7 @@ Retrieve your API key:
 ```bash
 aws secretsmanager get-secret-value \
   --secret-id ragbrain/dev/api-key \
-  --query SecretString --output text
+  --query SecretString --output text | jq -r .key
 ```
 
 ### 3. Configure macOS App
@@ -133,13 +379,6 @@ swift run
 ```
 
 Or open in Xcode and run.
-
-### 5. Enter API Key
-
-1. Click the menu bar icon → **Settings** (or press ⌘,)
-2. Go to the **API** tab
-3. Paste your API key
-4. Click **Test Connection**
 
 ---
 
@@ -163,6 +402,11 @@ Or open in Xcode and run.
 - "Show me code snippets related to authentication"
 - "What were my thoughts on the API design last week?"
 
+### Conversation Examples
+- Start: "What patterns have I used for caching?"
+- Follow-up: "Which one gave the best performance improvement?"
+- Follow-up: "How did I implement that?"
+
 ---
 
 ## Project Structure
@@ -180,7 +424,18 @@ ragbrain/
 ├── packages/
 │   ├── infra/              # AWS CDK infrastructure
 │   │   ├── lib/stacks/     # CDK stack definitions
+│   │   │   ├── api-stack.ts
+│   │   │   ├── compute-stack.ts
+│   │   │   ├── storage-stack.ts
+│   │   │   ├── search-stack.ts
+│   │   │   └── monitoring-stack.ts
 │   │   └── functions/      # Lambda handlers
+│   │       ├── capture/    # Thought capture
+│   │       ├── ask/        # Question answering
+│   │       ├── thoughts/   # List & filter
+│   │       ├── graph/      # Visualization data
+│   │       ├── indexer/    # AI processing pipeline
+│   │       └── conversations/ # Multi-turn conversations
 │   └── shared/             # Shared TypeScript types
 └── design/                 # Technical design docs
 ```
@@ -208,12 +463,31 @@ npx cdk deploy --all  # Deploy
 npx cdk destroy --all # Tear down
 ```
 
-### Local Configuration
+### Test API
 
-The app looks for configuration in this order:
-1. `apps/macos/.env.local` (gitignored)
-2. `~/.ragbrain/config`
-3. Settings entered in the app UI
+```bash
+# Set variables
+API_URL="https://your-api.execute-api.us-west-2.amazonaws.com/dev"
+API_KEY="your-api-key"
+
+# Capture a thought
+curl -X POST "$API_URL/thoughts" \
+  -H "x-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Test thought", "type": "note", "tags": ["test"]}'
+
+# Ask a question
+curl -X POST "$API_URL/ask" \
+  -H "x-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What have I captured today?"}'
+
+# Start a conversation
+curl -X POST "$API_URL/conversations" \
+  -H "x-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test Conversation"}'
+```
 
 ---
 
@@ -222,11 +496,12 @@ The app looks for configuration in this order:
 | Component | Technology |
 |-----------|------------|
 | **macOS App** | Swift 5.9, SwiftUI, SceneKit, Core Data |
-| **Backend** | AWS Lambda (Node.js 20), API Gateway |
-| **Database** | DynamoDB, OpenSearch Serverless |
-| **AI** | AWS Bedrock (Claude) |
+| **Backend** | AWS Lambda (Node.js 20), API Gateway HTTP API |
+| **Database** | DynamoDB (KMS encrypted), OpenSearch Serverless |
+| **AI Models** | Claude Sonnet 4.5, Claude Haiku 4.5, Titan Embeddings |
 | **Infrastructure** | AWS CDK v2 (TypeScript) |
 | **Search** | Hybrid BM25 + k-NN vector similarity |
+| **Encryption** | AWS KMS with application-level encryption |
 
 ---
 
@@ -234,9 +509,21 @@ The app looks for configuration in this order:
 
 1. **Speed first** — Capture must never block or feel slow (<150ms)
 2. **Citations required** — Every answer references source notes with timestamps
-3. **Privacy focused** — Your data, your AWS account, encrypted at rest
+3. **Privacy focused** — Your data, your AWS account, encrypted at rest and in conversations
 4. **Offline resilient** — Full local functionality, sync when available
 5. **Local-first** — Core Data for instant access, cloud for sync and search
+6. **AI-enhanced** — Smart tagging, categorization, and linking without manual effort
+
+---
+
+## Roadmap
+
+- [ ] Cognito authentication for multi-user support
+- [ ] Conversation search (Q&A as knowledge)
+- [ ] Export to Markdown/Obsidian
+- [ ] iOS companion app
+- [ ] Voice capture
+- [ ] Browser extension
 
 ---
 

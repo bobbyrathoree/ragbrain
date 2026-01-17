@@ -80,7 +80,7 @@ async function generateSummary(text: string): Promise<string> {
   }
   
   const input = {
-    modelId: 'anthropic.claude-3-haiku-20240307-v1:0',
+    modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
     contentType: 'application/json',
     accept: 'application/json',
     body: JSON.stringify({
@@ -107,45 +107,157 @@ async function generateSummary(text: string): Promise<string> {
   }
 }
 
-async function extractAutoTags(text: string, existingTags: string[]): Promise<string[]> {
-  // Simple keyword extraction for auto-tagging
-  const keywords = new Set<string>();
-  
-  // Technical keywords
-  const techPatterns = [
-    /\b(aws|azure|gcp|cloud)\b/gi,
-    /\b(react|vue|angular|svelte)\b/gi,
-    /\b(python|javascript|typescript|go|rust)\b/gi,
-    /\b(docker|kubernetes|k8s)\b/gi,
-    /\b(api|rest|graphql|grpc)\b/gi,
-    /\b(database|sql|nosql|postgres|mongodb)\b/gi,
-  ];
-  
-  for (const pattern of techPatterns) {
-    const matches = text.match(pattern);
-    if (matches) {
-      matches.forEach(match => keywords.add(match.toLowerCase()));
+// Types for smart tagging
+interface SmartTagResult {
+  tags: string[];
+  category: string;
+  intent: string;
+  entities: string[];
+}
+
+interface ThoughtContext {
+  app?: string;
+  windowTitle?: string;
+  repo?: string;
+  branch?: string;
+  file?: string;
+}
+
+async function generateSmartTags(text: string, context?: ThoughtContext): Promise<SmartTagResult> {
+  // Build context section if available
+  const contextSection = context ? `
+<context>
+App: ${context.app || 'unknown'}
+${context.repo ? `Repo: ${context.repo}` : ''}
+${context.file ? `File: ${context.file}` : ''}
+</context>` : '';
+
+  const prompt = `Analyze this thought and extract structured metadata.
+
+<thought>
+${text.substring(0, 2000)}
+</thought>
+${contextSection}
+
+Return ONLY valid JSON (no markdown, no explanation) with:
+1. "tags": array of 3-5 concise tags (lowercase, hyphenated, e.g. "api-design")
+2. "category": exactly one of ["engineering", "design", "product", "personal", "learning", "decision", "other"]
+3. "intent": exactly one of ["note", "question", "decision", "todo", "idea", "bug-report", "feature-request", "rationale"]
+4. "entities": array of 1-3 key names/terms/technologies mentioned
+
+Example response:
+{"tags":["api-design","rest","authentication"],"category":"engineering","intent":"decision","entities":["OAuth2","JWT"]}`;
+
+  try {
+    const input = {
+      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: 200,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    };
+
+    const command = new InvokeModelCommand(input);
+    const response = await bedrock.send(command);
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    let responseText = result.content[0].text.trim();
+
+    // Strip markdown code fences if present
+    if (responseText.startsWith('```')) {
+      responseText = responseText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
     }
+
+    // Parse JSON response
+    const parsed = JSON.parse(responseText);
+
+    return {
+      tags: (parsed.tags || []).slice(0, 5).map((t: string) => t.toLowerCase().replace(/\s+/g, '-')),
+      category: parsed.category || 'other',
+      intent: parsed.intent || 'note',
+      entities: (parsed.entities || []).slice(0, 3),
+    };
+  } catch (error) {
+    console.error('Smart tag generation failed:', error);
+    // Fallback to basic extraction
+    return fallbackTagExtraction(text);
   }
-  
-  // Topic detection
-  if (text.toLowerCase().includes('bug') || text.toLowerCase().includes('error')) {
-    keywords.add('bug');
+}
+
+function fallbackTagExtraction(text: string): SmartTagResult {
+  const tags: string[] = [];
+  const lowerText = text.toLowerCase();
+
+  // Basic keyword detection as fallback
+  const patterns: [RegExp, string][] = [
+    [/\b(aws|azure|gcp)\b/i, 'cloud'],
+    [/\b(react|vue|angular)\b/i, 'frontend'],
+    [/\b(api|rest|graphql)\b/i, 'api'],
+    [/\bbug\b/i, 'bug'],
+    [/\bfeature\b/i, 'feature'],
+  ];
+
+  for (const [pattern, tag] of patterns) {
+    if (pattern.test(text)) tags.push(tag);
   }
-  if (text.toLowerCase().includes('feature') || text.toLowerCase().includes('implement')) {
-    keywords.add('feature');
+
+  // Detect intent from keywords
+  let intent = 'note';
+  if (lowerText.includes('?')) intent = 'question';
+  else if (lowerText.includes('decided') || lowerText.includes('decision')) intent = 'decision';
+  else if (lowerText.includes('todo') || lowerText.includes('need to')) intent = 'todo';
+  else if (lowerText.includes('bug') || lowerText.includes('error')) intent = 'bug-report';
+
+  return {
+    tags: tags.slice(0, 5),
+    category: 'other',
+    intent,
+    entities: [],
+  };
+}
+
+async function findRelatedThoughts(thoughtId: string, embedding: number[], user: string): Promise<string[]> {
+  try {
+    // Query OpenSearch for k-nearest neighbors
+    const results = await opensearchClient.search({
+      index: `${SEARCH_COLLECTION}-thoughts`,
+      body: {
+        size: 6, // Get 6 to exclude self
+        query: {
+          bool: {
+            must: [
+              {
+                knn: {
+                  embedding: {
+                    vector: embedding,
+                    k: 6,
+                  },
+                },
+              },
+            ],
+            filter: [
+              { term: { user } }, // Only same user's thoughts
+            ],
+          },
+        },
+        _source: ['id'],
+      },
+    });
+
+    // Extract IDs, excluding the current thought
+    const relatedIds = results.body.hits.hits
+      .map((hit: any) => hit._source.id)
+      .filter((id: string) => id !== thoughtId)
+      .slice(0, 5);
+
+    return relatedIds;
+  } catch (error) {
+    console.error('Failed to find related thoughts:', error);
+    return [];
   }
-  if (text.toLowerCase().includes('performance') || text.toLowerCase().includes('optimize')) {
-    keywords.add('performance');
-  }
-  if (text.toLowerCase().includes('security') || text.toLowerCase().includes('vulnerability')) {
-    keywords.add('security');
-  }
-  
-  // Remove existing tags to avoid duplicates
-  const newTags = Array.from(keywords).filter(tag => !existingTags.includes(tag));
-  
-  return newTags.slice(0, 5); // Limit to 5 auto-tags
 }
 
 async function processThought(message: IndexMessage): Promise<void> {
@@ -166,11 +278,11 @@ async function processThought(message: IndexMessage): Promise<void> {
   
   // Generate summary
   const summary = await generateSummary(thoughtData.text);
-  
-  // Extract auto-tags
-  const autoTags = await extractAutoTags(thoughtData.text, thoughtData.tags);
-  const allTags = [...thoughtData.tags, ...autoTags];
-  
+
+  // Generate smart tags using Claude
+  const smartTags = await generateSmartTags(thoughtData.text, thoughtData.context);
+  const allTags = [...new Set([...thoughtData.tags, ...smartTags.tags])]; // Dedupe
+
   // Index to OpenSearch
   const searchDocument = {
     id: thoughtData.id,
@@ -178,20 +290,27 @@ async function processThought(message: IndexMessage): Promise<void> {
     summary,
     tags: allTags,
     type: thoughtData.type,
+    category: smartTags.category,
+    intent: smartTags.intent,
+    entities: smartTags.entities,
     created_at_epoch: new Date(thoughtData.createdAt).getTime(),
     decision_score: thoughtData.derived.decisionScore,
     embedding,
     user: thoughtData.user,
     context: thoughtData.context,
   };
-  
+
+  // For OpenSearch Serverless, use bulk API or index without explicit ID in params
+  // The ID is already in the document body
   await opensearchClient.index({
     index: `${SEARCH_COLLECTION}-thoughts`,
-    id: thoughtData.id,
     body: searchDocument,
-    refresh: false, // Don't wait for refresh
+    refresh: false,
   });
-  
+
+  // Find related thoughts using embedding similarity
+  const relatedIds = await findRelatedThoughts(thoughtData.id, embedding, thoughtData.user);
+
   // Update DynamoDB with derived fields
   await dynamodb.send(new UpdateItemCommand({
     TableName: TABLE_NAME,
@@ -199,17 +318,25 @@ async function processThought(message: IndexMessage): Promise<void> {
       pk: { S: `user#${thoughtData.user}` },
       sk: { S: `ts#${new Date(thoughtData.createdAt).getTime()}#${thoughtData.id}` },
     },
-    UpdateExpression: 'SET #summary = :summary, #autoTags = :autoTags, #embeddingId = :embeddingId, #indexedAt = :indexedAt',
+    UpdateExpression: 'SET #summary = :summary, #autoTags = :autoTags, #category = :category, #intent = :intent, #entities = :entities, #relatedIds = :relatedIds, #embeddingId = :embeddingId, #indexedAt = :indexedAt',
     ExpressionAttributeNames: {
       '#summary': 'summary',
       '#autoTags': 'autoTags',
+      '#category': 'category',
+      '#intent': 'intent',
+      '#entities': 'entities',
+      '#relatedIds': 'relatedIds',
       '#embeddingId': 'embeddingId',
       '#indexedAt': 'indexedAt',
     },
     ExpressionAttributeValues: {
       ':summary': { S: summary },
-      ':autoTags': { SS: autoTags.length > 0 ? autoTags : ['none'] },
-      ':embeddingId': { S: thoughtData.id }, // Using same ID for simplicity
+      ':autoTags': { SS: smartTags.tags.length > 0 ? smartTags.tags : ['none'] },
+      ':category': { S: smartTags.category },
+      ':intent': { S: smartTags.intent },
+      ':entities': { SS: smartTags.entities.length > 0 ? smartTags.entities : ['none'] },
+      ':relatedIds': { SS: relatedIds.length > 0 ? relatedIds : ['none'] },
+      ':embeddingId': { S: thoughtData.id },
       ':indexedAt': { N: Date.now().toString() },
     },
   }));

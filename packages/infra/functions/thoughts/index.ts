@@ -1,12 +1,14 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, GetItemCommand, BatchGetItemCommand } from '@aws-sdk/client-dynamodb';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
-import { unmarshall } from '@aws-sdk/util-dynamodb';
+import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 import {
   ThoughtsRequest,
   ThoughtsResponse,
   Thought,
   ThoughtType,
+  ThoughtCategory,
+  ThoughtIntent,
 } from '@ragbrain/shared';
 
 const dynamodb = new DynamoDBClient({});
@@ -31,7 +33,18 @@ interface DynamoThought {
   s3Key: string;
   summary?: string;
   autoTags?: Set<string>;
+  category?: string;
+  intent?: string;
+  entities?: Set<string>;
+  relatedIds?: Set<string>;
   indexedAt?: number;
+  context?: {
+    app?: string;
+    windowTitle?: string;
+    repo?: string;
+    branch?: string;
+    file?: string;
+  };
 }
 
 function buildQueryParams(
@@ -102,6 +115,13 @@ function buildQueryParams(
   return queryParams;
 }
 
+// Filter out 'none' placeholder values from sets
+function filterPlaceholder(set?: Set<string>): string[] | undefined {
+  if (!set) return undefined;
+  const arr = Array.from(set).filter(v => v !== 'none');
+  return arr.length > 0 ? arr : undefined;
+}
+
 function formatThought(item: DynamoThought): Thought {
   return {
     id: item.id,
@@ -110,11 +130,100 @@ function formatThought(item: DynamoThought): Thought {
     text: item.text,
     type: item.type as ThoughtType,
     tags: Array.from(item.tags || []),
+    context: item.context,
     derived: {
       summary: item.summary,
       decisionScore: item.decisionScore,
-      autoTags: item.autoTags ? Array.from(item.autoTags) : undefined,
+      autoTags: filterPlaceholder(item.autoTags),
+      category: item.category as ThoughtCategory | undefined,
+      intent: item.intent as ThoughtIntent | undefined,
+      entities: filterPlaceholder(item.entities),
+      relatedIds: filterPlaceholder(item.relatedIds),
     },
+  };
+}
+
+async function getThoughtById(user: string, thoughtId: string): Promise<DynamoThought | null> {
+  // Query to find the thought by id (since we don't know the exact sk timestamp)
+  // Note: FilterExpression is applied AFTER Limit, so we need to scan through more items
+  const result = await dynamodb.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'pk = :pk',
+    FilterExpression: 'id = :id',
+    ExpressionAttributeValues: {
+      ':pk': { S: `user#${user}` },
+      ':id': { S: thoughtId },
+    },
+    // Don't limit - need to scan through all items to find the one with matching id
+  }));
+
+  if (!result.Items || result.Items.length === 0) {
+    return null;
+  }
+
+  return unmarshall(result.Items[0]) as DynamoThought;
+}
+
+async function getThoughtsByIds(user: string, thoughtIds: string[]): Promise<Thought[]> {
+  if (thoughtIds.length === 0) return [];
+
+  // For each ID, we need to find the thought by querying
+  // This is less efficient but necessary since we don't store the full sk
+  const thoughts: Thought[] = [];
+
+  for (const id of thoughtIds.slice(0, 10)) { // Limit to 10 related thoughts
+    const thought = await getThoughtById(user, id);
+    if (thought) {
+      thoughts.push(formatThought(thought));
+    }
+  }
+
+  return thoughts;
+}
+
+async function handleRelatedThoughts(
+  event: APIGatewayProxyEventV2,
+  user: string
+): Promise<APIGatewayProxyResultV2> {
+  const thoughtId = event.pathParameters?.id;
+
+  if (!thoughtId) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'ValidationError',
+        message: 'Thought ID is required',
+      }),
+    };
+  }
+
+  // Get the source thought to find its relatedIds
+  const thought = await getThoughtById(user, thoughtId);
+
+  if (!thought) {
+    return {
+      statusCode: 404,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'NotFound',
+        message: 'Thought not found',
+      }),
+    };
+  }
+
+  // Get the related thoughts
+  const relatedIds = filterPlaceholder(thought.relatedIds) || [];
+  const relatedThoughts = await getThoughtsByIds(user, relatedIds);
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      thoughtId,
+      related: relatedThoughts,
+      count: relatedThoughts.length,
+    }),
   };
 }
 
@@ -122,7 +231,16 @@ export const handler = async (
   event: APIGatewayProxyEventV2
 ): Promise<APIGatewayProxyResultV2> => {
   const startTime = Date.now();
-  
+
+  // Get user from authorizer
+  const user = event.requestContext.authorizer?.lambda?.user || 'dev';
+
+  // Route based on path
+  const path = event.rawPath || '';
+  if (path.includes('/related')) {
+    return handleRelatedThoughts(event, user);
+  }
+
   try {
     // Parse query parameters
     const params: ThoughtsRequest = {
@@ -135,10 +253,7 @@ export const handler = async (
         : 50,
       cursor: event.queryStringParameters?.cursor,
     };
-    
-    // Get user from authorizer
-    const user = event.requestContext.authorizer?.lambda?.user || 'dev';
-    
+
     // Validate parameters
     if (params.limit && (params.limit < 1 || params.limit > 100)) {
       return {

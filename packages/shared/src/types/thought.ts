@@ -28,11 +28,34 @@ export interface CaptureContext {
   file?: string;
 }
 
+export type ThoughtCategory =
+  | 'engineering'
+  | 'design'
+  | 'product'
+  | 'personal'
+  | 'learning'
+  | 'decision'
+  | 'other';
+
+export type ThoughtIntent =
+  | 'note'
+  | 'question'
+  | 'decision'
+  | 'todo'
+  | 'idea'
+  | 'bug-report'
+  | 'feature-request'
+  | 'rationale';
+
 export interface DerivedFields {
   summary?: string;
   decisionScore?: number;
   embeddingId?: string;
   autoTags?: string[];
+  category?: ThoughtCategory;
+  intent?: ThoughtIntent;
+  entities?: string[];
+  relatedIds?: string[];
   sentiment?: 'positive' | 'negative' | 'neutral';
   importance?: number;
 }

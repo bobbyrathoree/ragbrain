@@ -109,3 +109,96 @@ export interface ErrorResponse {
   statusCode: number;
   requestId?: string;
 }
+
+// ============ Conversation Types ============
+
+export type ConversationStatus = 'active' | 'archived';
+export type MessageRole = 'user' | 'assistant';
+
+export interface Conversation {
+  id: string;
+  user: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  status: ConversationStatus;
+}
+
+export interface ConversationMessage {
+  id: string;
+  conversationId: string;
+  role: MessageRole;
+  content: string; // Decrypted for API response
+  citations?: Citation[];
+  searchedThoughts?: string[];
+  confidence?: number;
+  createdAt: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  lastMessagePreview?: string;
+  status: ConversationStatus;
+}
+
+// Conversation Requests
+export interface CreateConversationRequest {
+  title?: string;
+  initialMessage?: string;
+  context?: {
+    thoughtIds?: string[];
+    tags?: string[];
+    timeWindow?: string;
+  };
+}
+
+export interface SendMessageRequest {
+  content: string;
+  timeWindow?: string;
+  tags?: string[];
+  includeHistory?: number; // Default: 10
+}
+
+export interface ListConversationsRequest {
+  limit?: number;
+  cursor?: string;
+  status?: ConversationStatus;
+}
+
+export interface UpdateConversationRequest {
+  title?: string;
+  status?: ConversationStatus;
+}
+
+// Conversation Responses
+export interface CreateConversationResponse {
+  id: string;
+  title: string;
+  createdAt: string;
+  messages?: ConversationMessage[];
+}
+
+export interface SendMessageResponse {
+  userMessage: ConversationMessage;
+  assistantMessage: ConversationMessage;
+  processingTime: number;
+}
+
+export interface GetConversationResponse {
+  conversation: Conversation;
+  messages: ConversationMessage[];
+  cursor?: string;
+  hasMore: boolean;
+}
+
+export interface ListConversationsResponse {
+  conversations: ConversationSummary[];
+  cursor?: string;
+  hasMore: boolean;
+  totalCount?: number;
+}

@@ -47,6 +47,7 @@ const computeStack = new ComputeStack(app, `${project}-compute-${env}`, {
   thoughtsTable: storageStack.thoughtsTable,
   indexQueue: storageStack.indexQueue,
   searchCollection: searchStack.searchCollection,
+  encryptionKey: storageStack.encryptionKey,
 });
 
 // API Gateway
@@ -58,6 +59,7 @@ const apiStack = new ApiStack(app, `${project}-api-${env}`, {
   askLambda: computeStack.askLambda,
   thoughtsLambda: computeStack.thoughtsLambda,
   graphLambda: computeStack.graphLambda,
+  conversationsLambda: computeStack.conversationsLambda,
 });
 
 // Monitoring and alerting
@@ -70,6 +72,7 @@ const monitoringStack = new MonitoringStack(app, `${project}-monitoring-${env}`,
     computeStack.captureLambda,
     computeStack.indexerLambda,
     computeStack.askLambda,
+    computeStack.conversationsLambda,
   ],
   dlq: storageStack.dlq,
 });

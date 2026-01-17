@@ -123,6 +123,20 @@ export class StorageStack extends cdk.Stack {
       nonKeyAttributes: ['text', 'tags', 'summary'],
     });
 
+    // GSI3 for listing conversations by user, sorted by last update
+    this.thoughtsTable.addGlobalSecondaryIndex({
+      indexName: 'gsi3',
+      partitionKey: {
+        name: 'gsi3pk',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'gsi3sk',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // Dead Letter Queue
     this.dlq = new sqs.Queue(this, 'DLQ', {
       queueName: `${projectName}-dlq-${environment}`,

@@ -8,6 +8,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as opensearch from 'aws-cdk-lib/aws-opensearchserverless';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -18,6 +19,7 @@ interface ComputeStackProps extends cdk.StackProps {
   thoughtsTable: dynamodb.Table;
   indexQueue: sqs.Queue;
   searchCollection: opensearch.CfnCollection;
+  encryptionKey: kms.Key;
 }
 
 export class ComputeStack extends cdk.Stack {
@@ -26,6 +28,7 @@ export class ComputeStack extends cdk.Stack {
   public readonly askLambda: lambda.Function;
   public readonly thoughtsLambda: lambda.Function;
   public readonly graphLambda: lambda.Function;
+  public readonly conversationsLambda: lambda.Function;
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
@@ -37,6 +40,7 @@ export class ComputeStack extends cdk.Stack {
       thoughtsTable,
       indexQueue,
       searchCollection,
+      encryptionKey,
     } = props;
 
     // Shared Lambda layer for common dependencies
@@ -46,7 +50,7 @@ export class ComputeStack extends cdk.Stack {
       description: 'Shared dependencies for all Lambda functions',
     });
 
-    // Bedrock access policy
+    // Bedrock access policy - includes inference profiles for Claude 4.5 models
     const bedrockPolicy = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -54,9 +58,21 @@ export class ComputeStack extends cdk.Stack {
         'bedrock:InvokeModelWithResponseStream',
       ],
       resources: [
+        // Titan embeddings
         `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v1`,
+        // Legacy Claude 3 models (for backwards compatibility)
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-sonnet-*`,
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-haiku-*`,
+        // Claude 4.5 inference profiles (cross-region)
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0`,
+        // Foundation models in all US regions for cross-region inference
+        'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+        'arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+        'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+        'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
       ],
     });
 
@@ -228,6 +244,39 @@ export class ComputeStack extends cdk.Stack {
       })
     );
 
+    // Conversations Lambda - handles multi-turn conversations with encryption
+    this.conversationsLambda = new lambdaNodejs.NodejsFunction(this, 'ConversationsLambda', {
+      functionName: `${projectName}-conversations-${environment}`,
+      entry: path.join(__dirname, '../../functions/conversations/index.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        ...commonEnv,
+        KMS_KEY_ARN: encryptionKey.keyArn,
+        QUEUE_URL: indexQueue.queueUrl,
+      },
+      layers: [sharedLayer],
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: bundlingOptions,
+    });
+
+    // Grant permissions for Conversations Lambda
+    thoughtsTable.grantReadWriteData(this.conversationsLambda);
+    encryptionKey.grantEncryptDecrypt(this.conversationsLambda);
+    indexQueue.grantSendMessages(this.conversationsLambda);
+    this.conversationsLambda.addToRolePolicy(bedrockPolicy);
+    this.conversationsLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['aoss:APIAccessAll'],
+        resources: [
+          `arn:aws:aoss:${this.region}:${this.account}:collection/${searchCollection.attrId}`,
+        ],
+      })
+    );
+
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'CaptureLambdaArn', {
       value: this.captureLambda.functionArn,
@@ -242,6 +291,11 @@ export class ComputeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AskLambdaArn', {
       value: this.askLambda.functionArn,
       description: 'Ask Lambda function ARN',
+    });
+
+    new cdk.CfnOutput(this, 'ConversationsLambdaArn', {
+      value: this.conversationsLambda.functionArn,
+      description: 'Conversations Lambda function ARN',
     });
 
     // Tags
