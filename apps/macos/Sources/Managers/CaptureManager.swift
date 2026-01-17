@@ -245,10 +245,14 @@ class SyncAgent {
 
 // MARK: - API Client
 class APIClient {
-    private let baseURL = "https://api.ultrathink.dev"
-    private let apiKey = "dev-key-123" // Will be stored in Keychain
-    
+    private var baseURL: String { APIConfiguration.shared.baseURL }
+    private var apiKey: String { APIConfiguration.shared.apiKey ?? "" }
+
     func uploadThought(_ thought: Thought) async throws {
+        guard !apiKey.isEmpty else {
+            throw APIError.authenticationError
+        }
+
         let endpoint = URL(string: "\(baseURL)/thoughts")!
         
         var request = URLRequest(url: endpoint)

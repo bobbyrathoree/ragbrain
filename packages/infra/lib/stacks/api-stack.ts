@@ -136,7 +136,7 @@ export class ApiStack extends cdk.Stack {
     // Access logging
     const logGroup = new logs.LogGroup(this, 'ApiLogs', {
       logGroupName: `/aws/apigateway/${projectName}-${environment}`,
-      retention: logs.RetentionDays.THIRTY_DAYS,
+      retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -251,8 +251,10 @@ export class ApiStack extends cdk.Stack {
     });
 
     // Associate WAF with API
+    // Construct the stage ARN for HTTP API
+    const stageArn = `arn:aws:apigateway:${this.region}::/apis/${this.api.httpApiId}/stages/${environment}`;
     new waf.CfnWebACLAssociation(this, 'WebAclAssociation', {
-      resourceArn: stage.arnForExecuteApi(),
+      resourceArn: stageArn,
       webAclArn: webAcl.attrArn,
     });
 

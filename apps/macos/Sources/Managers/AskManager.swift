@@ -136,11 +136,8 @@ enum AskError: Error, LocalizedError {
 
 // MARK: - API Client
 class AskAPIClient {
-    private let baseURL = "https://api.ultrathink.dev"
-    private var apiKey: String {
-        // TODO: Retrieve from Keychain
-        "dev-key-123"
-    }
+    private var baseURL: String { APIConfiguration.shared.baseURL }
+    private var apiKey: String { APIConfiguration.shared.apiKey ?? "" }
 
     struct AskRequest: Codable {
         let query: String
@@ -157,6 +154,10 @@ class AskAPIClient {
     }
 
     func ask(query: String, tags: [String]?, timeWindow: String?) async throws -> AskAnswer {
+        guard !apiKey.isEmpty else {
+            throw AskError.unauthorized
+        }
+
         let endpoint = URL(string: "\(baseURL)/ask")!
 
         var request = URLRequest(url: endpoint)

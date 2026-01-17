@@ -141,7 +141,7 @@ export class StorageStack extends cdk.Stack {
         queue: this.dlq,
         maxReceiveCount: 3,
       },
-      receiveMessageWaitTimeSeconds: 20, // Long polling
+      receiveMessageWaitTime: cdk.Duration.seconds(20), // Long polling
     });
 
     // CloudFormation outputs

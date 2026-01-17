@@ -120,7 +120,7 @@ export class ComputeStack extends cdk.Stack {
     this.indexerLambda.addEventSource(
       new lambdaEventSources.SqsEventSource(indexQueue, {
         batchSize: 5,
-        maxBatchingWindowInSeconds: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
         reportBatchItemFailures: true,
       })
     );

@@ -3,13 +3,15 @@ import SceneKit
 import Charts
 
 struct ContentView: View {
-    @State private var selectedView: ViewMode = .hypergraph
+    @StateObject private var thoughtsManager = ThoughtsManager()
+    @StateObject private var graphManager = GraphManager()
+    @State private var selectedView: ViewMode = .feed
     @State private var searchQuery = ""
     @State private var selectedThought: Thought?
     @State private var showingDetail = false
     @State private var timeRange: TimeRange = .week
     @State private var hoveredNode: String?
-    
+
     enum ViewMode: String, CaseIterable {
         case hypergraph = "Hypergraph"
         case timeline = "Timeline"
@@ -335,7 +337,7 @@ struct ConstellationView: View {
 struct IntelligentFeedView: View {
     @Binding var selectedThought: Thought?
     let searchQuery: String
-    @State private var thoughts: [Thought] = []
+    @StateObject private var thoughtsManager = ThoughtsManager()
     @State private var groupingMode: GroupingMode = .smart
     @State private var expandedSections: Set<String> = []
 
@@ -349,43 +351,62 @@ struct IntelligentFeedView: View {
     struct ThoughtGroup: Identifiable {
         let id: String
         let key: String
-        let thoughts: [Thought]
+        let thoughts: [ThoughtResponse]
     }
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                ForEach(groupedThoughts) { group in
-                    Section {
-                        if expandedSections.contains(group.key) {
-                            ForEach(group.thoughts) { thought in
-                                ThoughtCard(
-                                    thought: thought,
-                                    isSelected: selectedThought?.id == thought.id
-                                )
-                                .onTapGesture {
-                                    withAnimation(.spring()) {
-                                        selectedThought = thought
-                                    }
+            if thoughtsManager.isLoading && thoughtsManager.thoughts.isEmpty {
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("Loading thoughts...")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, 100)
+            } else if thoughtsManager.thoughts.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "note.text")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.tertiary)
+                    Text("No thoughts yet")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Press ⌥S to capture your first thought")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, 100)
+            } else {
+                LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                    ForEach(groupedThoughts) { group in
+                        Section {
+                            if expandedSections.contains(group.key) {
+                                ForEach(group.thoughts) { thought in
+                                    ThoughtResponseCard(
+                                        thought: thought,
+                                        isSelected: false
+                                    )
+                                    .transition(.asymmetric(
+                                        insertion: .push(from: .trailing),
+                                        removal: .push(from: .leading)
+                                    ))
                                 }
-                                .transition(.asymmetric(
-                                    insertion: .push(from: .trailing),
-                                    removal: .push(from: .leading)
-                                ))
                             }
-                        }
-                    } header: {
-                        SectionHeader(
-                            title: group.key,
-                            count: group.thoughts.count,
-                            isExpanded: expandedSections.contains(group.key)
-                        )
-                        .onTapGesture {
-                            withAnimation(.spring()) {
-                                if expandedSections.contains(group.key) {
-                                    expandedSections.remove(group.key)
-                                } else {
-                                    expandedSections.insert(group.key)
+                        } header: {
+                            SectionHeader(
+                                title: group.key,
+                                count: group.thoughts.count,
+                                isExpanded: expandedSections.contains(group.key)
+                            )
+                            .onTapGesture {
+                                withAnimation(.spring()) {
+                                    if expandedSections.contains(group.key) {
+                                        expandedSections.remove(group.key)
+                                    } else {
+                                        expandedSections.insert(group.key)
+                                    }
                                 }
                             }
                         }
@@ -394,16 +415,148 @@ struct IntelligentFeedView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            // Floating filter bar
             FilterBar(groupingMode: $groupingMode)
                 .background(.ultraThinMaterial)
+        }
+        .refreshable {
+            await thoughtsManager.refresh()
+        }
+        .task {
+            await thoughtsManager.loadThoughts()
+            // Expand first section by default
+            if let firstGroup = groupedThoughts.first {
+                expandedSections.insert(firstGroup.key)
+            }
         }
     }
 
     private var groupedThoughts: [ThoughtGroup] {
-        // Group thoughts based on selected mode
-        // Use ML clustering for "smart" mode
-        []
+        let thoughts = thoughtsManager.thoughts
+
+        guard !thoughts.isEmpty else { return [] }
+
+        switch groupingMode {
+        case .smart, .topics:
+            // Group by primary tag
+            return groupByTag(thoughts)
+        case .chronological:
+            return groupByDate(thoughts)
+        case .importance:
+            return groupByImportance(thoughts)
+        }
+    }
+
+    private func groupByTag(_ thoughts: [ThoughtResponse]) -> [ThoughtGroup] {
+        var groups: [String: [ThoughtResponse]] = [:]
+
+        for thought in thoughts {
+            let key = thought.tags.first ?? "Untagged"
+            groups[key, default: []].append(thought)
+        }
+
+        return groups.map { ThoughtGroup(id: $0.key, key: "#\($0.key)", thoughts: $0.value) }
+            .sorted { $0.thoughts.count > $1.thoughts.count }
+    }
+
+    private func groupByDate(_ thoughts: [ThoughtResponse]) -> [ThoughtGroup] {
+        let calendar = Calendar.current
+        var groups: [String: [ThoughtResponse]] = [:]
+
+        for thought in thoughts {
+            if let date = thought.createdAtDate {
+                let key: String
+                if calendar.isDateInToday(date) {
+                    key = "Today"
+                } else if calendar.isDateInYesterday(date) {
+                    key = "Yesterday"
+                } else if calendar.isDate(date, equalTo: Date(), toGranularity: .weekOfYear) {
+                    key = "This Week"
+                } else {
+                    key = "Earlier"
+                }
+                groups[key, default: []].append(thought)
+            }
+        }
+
+        let order = ["Today", "Yesterday", "This Week", "Earlier"]
+        return order.compactMap { key in
+            guard let thoughts = groups[key], !thoughts.isEmpty else { return nil }
+            return ThoughtGroup(id: key, key: key, thoughts: thoughts)
+        }
+    }
+
+    private func groupByImportance(_ thoughts: [ThoughtResponse]) -> [ThoughtGroup] {
+        var high: [ThoughtResponse] = []
+        var medium: [ThoughtResponse] = []
+        var low: [ThoughtResponse] = []
+
+        for thought in thoughts {
+            let score = thought.derived?.decisionScore ?? 0
+            if score > 0.6 {
+                high.append(thought)
+            } else if score > 0.3 {
+                medium.append(thought)
+            } else {
+                low.append(thought)
+            }
+        }
+
+        var groups: [ThoughtGroup] = []
+        if !high.isEmpty { groups.append(ThoughtGroup(id: "high", key: "High Priority", thoughts: high)) }
+        if !medium.isEmpty { groups.append(ThoughtGroup(id: "medium", key: "Medium Priority", thoughts: medium)) }
+        if !low.isEmpty { groups.append(ThoughtGroup(id: "low", key: "Notes", thoughts: low)) }
+        return groups
+    }
+}
+
+// MARK: - Thought Response Card (for API data)
+struct ThoughtResponseCard: View {
+    let thought: ThoughtResponse
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: iconForType(thought.type))
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(thought.text)
+                    .font(.body)
+                    .lineLimit(3)
+
+                HStack {
+                    ForEach(thought.tags.prefix(3), id: \.self) { tag in
+                        Text("#\(tag)")
+                            .font(.caption2)
+                            .foregroundStyle(.blue)
+                    }
+
+                    Spacer()
+
+                    if let date = thought.createdAtDate {
+                        Text(date, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func iconForType(_ type: String) -> String {
+        switch type {
+        case "code": return "chevron.left.forwardslash.chevron.right"
+        case "decision": return "arrow.triangle.branch"
+        case "link": return "link"
+        case "todo": return "checklist"
+        case "rationale": return "lightbulb"
+        default: return "note.text"
+        }
     }
 }
 
