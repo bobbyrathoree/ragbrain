@@ -18,11 +18,40 @@ final class APIConfiguration: ObservableObject {
     /// Connection status
     @Published var isConnected: Bool = false
 
-    // Deployed API Gateway endpoint (us-west-2)
-    private let defaultBaseURL = "https://yforrbwe60.execute-api.us-west-2.amazonaws.com/dev"
+    // Default placeholder - configure your deployed API URL in Settings
+    // Or create apps/macos/.env.local with: API_BASE_URL=https://your-api.execute-api.region.amazonaws.com/dev
+    private static var defaultBaseURL: String {
+        // Check for local config file first
+        if let localURL = loadLocalConfig() {
+            return localURL
+        }
+        return "https://api.example.com"
+    }
+
+    private static func loadLocalConfig() -> String? {
+        // Look for .env.local in the app bundle's parent directory during development
+        let fileManager = FileManager.default
+        let possiblePaths = [
+            // Development: relative to source
+            URL(fileURLWithPath: #file).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".env.local"),
+            // Home directory fallback
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".ultrathink/config")
+        ]
+
+        for path in possiblePaths {
+            if let contents = try? String(contentsOf: path, encoding: .utf8) {
+                for line in contents.components(separatedBy: .newlines) {
+                    if line.hasPrefix("API_BASE_URL=") {
+                        return String(line.dropFirst("API_BASE_URL=".count)).trimmingCharacters(in: .whitespaces)
+                    }
+                }
+            }
+        }
+        return nil
+    }
 
     private init() {
-        self.baseURL = UserDefaults.standard.string(forKey: "ultrathink.apiBaseURL") ?? defaultBaseURL
+        self.baseURL = UserDefaults.standard.string(forKey: "ultrathink.apiBaseURL") ?? Self.defaultBaseURL
         self.hasAPIKey = KeychainHelper.load(key: "ultrathink-api-key") != nil
     }
 

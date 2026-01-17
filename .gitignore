@@ -104,6 +104,10 @@ tsconfig.tsbuildinfo
 tmp/
 temp/
 
+# Local configuration (contains API URLs and keys)
+.ultrathink/
+**/config.local
+
 # Database
 *.db
 *.sqlite
