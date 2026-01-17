@@ -1,0 +1,30 @@
+{
+  "name": "ultrathink",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal knowledge management system with blazing-fast capture and intelligent retrieval",
+  "workspaces": [
+    "packages/*",
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "dev:web": "npm run dev -w @ultrathink/web",
+    "dev:api": "npm run dev -w @ultrathink/api",
+    "deploy:infra": "npm run deploy -w @ultrathink/infra",
+    "clean": "npm run clean --workspaces"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "prettier": "^3.0.0",
+    "eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
