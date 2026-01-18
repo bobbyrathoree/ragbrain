@@ -165,13 +165,15 @@ async function exportThoughts(user: string, since: number): Promise<ThoughtExpor
       const thought = unmarshall(item) as DynamoThought;
 
       // Combine user tags and auto-generated tags
-      const allTags = [...new Set([
-        ...(thought.tags || []),
-        ...(thought.autoTags || []),
-      ])].filter(t => t !== 'none');
+      // Handle both array and Set formats from DynamoDB
+      const userTags = Array.isArray(thought.tags) ? thought.tags : [...(thought.tags || [])];
+      const autoTags = Array.isArray(thought.autoTags) ? thought.autoTags : [...(thought.autoTags || [])];
+      const allTags = [...new Set([...userTags, ...autoTags])].filter(t => t && t !== 'none');
 
-      // Combine related IDs
-      const relatedIds = (thought.relatedIds || []).filter(id => id !== 'none');
+      // Combine related IDs - handle both array and Set formats
+      const rawRelatedIds = thought.relatedIds;
+      const relatedIds = (Array.isArray(rawRelatedIds) ? rawRelatedIds : [...(rawRelatedIds || [])])
+        .filter(id => id && id !== 'none');
 
       thoughts.push({
         id: thought.id,
