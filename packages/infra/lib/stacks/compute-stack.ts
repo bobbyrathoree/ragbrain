@@ -29,6 +29,7 @@ export class ComputeStack extends cdk.Stack {
   public readonly thoughtsLambda: lambda.Function;
   public readonly graphLambda: lambda.Function;
   public readonly conversationsLambda: lambda.Function;
+  public readonly exportLambda: lambda.Function;
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
@@ -131,7 +132,7 @@ export class ComputeStack extends cdk.Stack {
     thoughtsTable.grantWriteData(this.captureLambda);
     indexQueue.grantSendMessages(this.captureLambda);
 
-    // Indexer Lambda - processes thoughts for search
+    // Indexer Lambda - processes thoughts and conversations for search
     this.indexerLambda = new lambdaNodejs.NodejsFunction(this, 'IndexerLambda', {
       functionName: `${projectName}-indexer-${environment}`,
       entry: path.join(__dirname, '../../functions/indexer/index.ts'),
@@ -139,7 +140,10 @@ export class ComputeStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       memorySize: 1024,
       timeout: cdk.Duration.seconds(120),
-      environment: commonEnv,
+      environment: {
+        ...commonEnv,
+        KMS_KEY_ARN: encryptionKey.keyArn, // For decrypting conversation messages
+      },
       layers: [sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       reservedConcurrentExecutions: 10, // Limit concurrency to avoid Bedrock throttling
@@ -158,6 +162,7 @@ export class ComputeStack extends cdk.Stack {
     // Grant permissions
     storageBucket.grantRead(this.indexerLambda);
     thoughtsTable.grantReadWriteData(this.indexerLambda);
+    encryptionKey.grantDecrypt(this.indexerLambda); // For decrypting conversation messages
     this.indexerLambda.addToRolePolicy(bedrockPolicy);
 
     // OpenSearch permissions
@@ -277,6 +282,27 @@ export class ComputeStack extends cdk.Stack {
       })
     );
 
+    // Export Lambda - handles Obsidian sync exports
+    this.exportLambda = new lambdaNodejs.NodejsFunction(this, 'ExportLambda', {
+      functionName: `${projectName}-export-${environment}`,
+      entry: path.join(__dirname, '../../functions/export/index.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        ...commonEnv,
+        KMS_KEY_ARN: encryptionKey.keyArn, // For decrypting conversation messages
+      },
+      layers: [sharedLayer],
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: bundlingOptions,
+    });
+
+    // Grant permissions for Export Lambda
+    thoughtsTable.grantReadData(this.exportLambda);
+    encryptionKey.grantDecrypt(this.exportLambda); // For decrypting conversation messages
+
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'CaptureLambdaArn', {
       value: this.captureLambda.functionArn,
@@ -296,6 +322,11 @@ export class ComputeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ConversationsLambdaArn', {
       value: this.conversationsLambda.functionArn,
       description: 'Conversations Lambda function ARN',
+    });
+
+    new cdk.CfnOutput(this, 'ExportLambdaArn', {
+      value: this.exportLambda.functionArn,
+      description: 'Export Lambda function ARN',
     });
 
     // Tags

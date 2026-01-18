@@ -8,6 +8,7 @@ import {
   AskRequest,
   AskResponse,
   Citation,
+  ConversationHit,
   parseTimeWindow,
   calculateRecencyScore,
 } from '@ragbrain/shared';
@@ -46,6 +47,12 @@ interface SearchHit {
     decision_score: number;
     embedding: number[];
     user: string;
+    // Conversation-specific fields
+    docType?: 'thought' | 'conversation';
+    title?: string;
+    messageCount?: number;
+    citedThoughtIds?: string[];
+    updated_at_epoch?: number;
   };
   highlight?: {
     text?: string[];
@@ -410,12 +417,33 @@ export const handler = async (
     
     // Score and rank results
     const rankedResults = scoreAndRank(searchResults);
-    
-    // Generate answer with citations
+
+    // Separate thoughts from conversations
+    const thoughtResults = rankedResults.filter(hit => hit._source.docType !== 'conversation');
+    const conversationResults = rankedResults.filter(hit => hit._source.docType === 'conversation');
+
+    // Generate answer with citations (using only thoughts for primary answer)
     const { answer, citations, confidence } = await generateAnswer(
       body.query,
-      rankedResults
+      thoughtResults.length > 0 ? thoughtResults : rankedResults // Fallback to all if no thoughts
     );
+
+    // Build conversation hits for response
+    const conversationHits: ConversationHit[] = conversationResults.slice(0, 3).map(hit => {
+      // Extract last Q&A exchange as preview
+      const text = hit._source.text || '';
+      const exchanges = text.split('\n\n');
+      const lastExchange = exchanges.slice(-2).join(' → ').substring(0, 150);
+
+      return {
+        id: hit._source.id,
+        title: hit._source.title || 'Untitled Conversation',
+        preview: lastExchange || hit._source.summary || text.substring(0, 150),
+        messageCount: hit._source.messageCount || 0,
+        score: hit._score,
+        createdAt: new Date(hit._source.created_at_epoch).toISOString(),
+      };
+    });
     
     // Emit metrics
     const processingTime = Date.now() - startTime;
@@ -463,6 +491,7 @@ export const handler = async (
     const response: AskResponse = {
       answer,
       citations: citations.slice(0, body.limit || 5),
+      conversationHits: conversationHits.length > 0 ? conversationHits : undefined,
       confidence,
       processingTime,
     };

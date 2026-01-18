@@ -27,7 +27,7 @@ Capture thoughts instantly with global hotkeys. Ask questions and get citation-b
 - Have back-and-forth conversations with follow-up questions
 - Full conversation history with context maintained
 - **End-to-end encrypted** — Messages encrypted with KMS before storage
-- Conversations become searchable knowledge
+- **Searchable** — Conversations are indexed alongside thoughts for unified search
 
 ### AI-Powered Intelligence
 - **Smart Auto-Tagging** — Claude analyzes each thought and extracts:
@@ -43,6 +43,14 @@ Capture thoughts instantly with global hotkeys. Ask questions and get citation-b
 - **Constellation View** — See thoughts as a twinkling starfield grouped by topic
 - **Timeline Heatmap** — Visualize capture density over time
 - **Smart Feed** — AI-grouped thoughts by topic, date, category, or importance
+
+### Obsidian Sync
+- **Continuous export** to your local Obsidian vault
+- **Daily notes** with thoughts and conversations organized by date
+- **Smart file names** — Human-readable IDs like `t-redis-caching-a1b2.md`
+- **Wikilinks** — Navigate between thoughts, conversations, and daily notes
+- **Incremental sync** — Only syncs changes since last sync
+- **Auto-detect vault** — Finds your Obsidian vault automatically
 
 ---
 
@@ -65,17 +73,17 @@ Capture thoughts instantly with global hotkeys. Ask questions and get citation-b
 │                     AWS Backend                               │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │                   API Gateway                            │ │
-│  └──┬──────┬──────┬──────┬──────┬──────┬─────────────────┘ │
-│     │      │      │      │      │      │                     │
-│  ┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼───────┐           │
-│  │Capt-││ Ask ││Thou-││Graph││Index││Conversa- │  Lambda    │
-│  │ure  ││     ││ghts ││     ││er   ││tions     │            │
-│  └──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬───────┘           │
-│     │      │      │      │      │      │                     │
-│  ┌──▼──────▼──────▼──────▼──────▼──────▼───┐               │
-│  │              DynamoDB                    │               │
-│  │    (thoughts + conversations)            │ KMS Encrypted │
-│  └─────────────────┬───────────────────────┘               │
+│  └──┬──────┬──────┬──────┬──────┬──────┬──────┬──────────┘ │
+│     │      │      │      │      │      │      │              │
+│  ┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──┐┌──▼──────┐     │
+│  │Capt-││ Ask ││Thou-││Graph││Index││Conv-││ Export  │ Lambda│
+│  │ure  ││     ││ghts ││     ││er   ││ersa-││(Obsid.) │      │
+│  └──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬──┘└──┬──────┘     │
+│     │      │      │      │      │      │      │              │
+│  ┌──▼──────▼──────▼──────▼──────▼──────▼──────▼──┐         │
+│  │              DynamoDB                        │           │
+│  │    (thoughts + conversations)                │KMS Encrypt│
+│  └─────────────────┬────────────────────────────┘           │
 │                    │                                        │
 │  ┌─────────────────▼───────────────────────┐               │
 │  │       OpenSearch Serverless              │               │
@@ -305,6 +313,47 @@ Response:
 }
 ```
 
+### Export (Obsidian Sync)
+
+#### Get Export Data
+```http
+GET /export?since=0
+```
+
+Parameters:
+- `since` — Unix timestamp in milliseconds. Use `0` for full export, or last `syncTimestamp` for incremental.
+
+Response:
+```json
+{
+  "thoughts": [{
+    "id": "t_abc123",
+    "smartId": "t-redis-caching-a1b2",
+    "text": "Use Redis caching for frequently accessed endpoints",
+    "type": "note",
+    "tags": ["performance", "redis"],
+    "category": "engineering",
+    "context": {"app": "VSCode", "repo": "myproject"},
+    "relatedIds": ["t_def456"],
+    "createdAt": "2026-01-17T15:00:00.000Z"
+  }],
+  "conversations": [{
+    "id": "conv_xyz789",
+    "smartId": "conv-api-design-e5f6",
+    "title": "API Design Discussion",
+    "messages": [
+      {"role": "user", "content": "What patterns...", "createdAt": "..."},
+      {"role": "assistant", "content": "Based on...", "citations": [...], "createdAt": "..."}
+    ],
+    "status": "active",
+    "createdAt": "2026-01-17T16:00:00.000Z",
+    "updatedAt": "2026-01-17T16:15:00.000Z"
+  }],
+  "deleted": ["t_old123"],
+  "syncTimestamp": 1705600800000
+}
+```
+
 ---
 
 ## Security
@@ -434,8 +483,9 @@ ragbrain/
 │   │       ├── ask/        # Question answering
 │   │       ├── thoughts/   # List & filter
 │   │       ├── graph/      # Visualization data
-│   │       ├── indexer/    # AI processing pipeline
-│   │       └── conversations/ # Multi-turn conversations
+│   │       ├── indexer/    # AI processing (thoughts + conversations)
+│   │       ├── conversations/ # Multi-turn conversations
+│   │       └── export/     # Obsidian sync export
 │   └── shared/             # Shared TypeScript types
 └── design/                 # Technical design docs
 ```
@@ -518,9 +568,9 @@ curl -X POST "$API_URL/conversations" \
 
 ## Roadmap
 
+- [x] Conversation search (Q&A sessions indexed as searchable knowledge)
+- [x] Obsidian sync (continuous export with daily notes, smart IDs, wikilinks)
 - [ ] Cognito authentication for multi-user support
-- [ ] Conversation search (Q&A as knowledge)
-- [ ] Export to Markdown/Obsidian
 - [ ] iOS companion app
 - [ ] Voice capture
 - [ ] Browser extension

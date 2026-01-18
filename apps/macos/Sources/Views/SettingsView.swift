@@ -14,12 +14,17 @@ struct SettingsView: View {
                     Label("Hotkeys", systemImage: "keyboard")
                 }
 
+            ObsidianSettingsTab()
+                .tabItem {
+                    Label("Obsidian", systemImage: "doc.text")
+                }
+
             GeneralSettingsTab()
                 .tabItem {
                     Label("General", systemImage: "gear")
                 }
         }
-        .frame(width: 450, height: 300)
+        .frame(width: 500, height: 380)
     }
 }
 
@@ -176,6 +181,165 @@ struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+// MARK: - Obsidian Settings
+struct ObsidianSettingsTab: View {
+    @StateObject private var syncManager = ObsidianSyncManager()
+    @State private var isSelectingVault = false
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    if let vault = syncManager.vaultPath {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(vault.lastPathComponent)
+                                .fontWeight(.medium)
+                            Text(vault.path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    } else {
+                        Text("No vault selected")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Detect") {
+                        Task {
+                            await syncManager.detectVault()
+                        }
+                    }
+                    .disabled(syncManager.syncStatus == .detecting)
+
+                    Button("Browse...") {
+                        selectVault()
+                    }
+                }
+
+                if syncManager.vaultPath != nil {
+                    Toggle("Enable Sync", isOn: $syncManager.syncEnabled)
+                }
+            } header: {
+                Text("Vault")
+            } footer: {
+                Text("Select your Obsidian vault to sync thoughts and conversations as markdown files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if syncManager.vaultPath != nil {
+                Section {
+                    HStack {
+                        syncStatusView
+
+                        Spacer()
+
+                        Button("Sync Now") {
+                            Task {
+                                await syncManager.sync()
+                            }
+                        }
+                        .disabled(!canSync)
+                    }
+
+                    if let progress = syncManager.syncProgress {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(progress.phase)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if progress.total > 0 {
+                                ProgressView(value: Double(progress.current), total: Double(progress.total))
+                            }
+                        }
+                    }
+
+                    if let lastSync = syncManager.lastSync {
+                        HStack {
+                            Text("Last synced:")
+                                .foregroundStyle(.secondary)
+                            Text(lastSync, style: .relative)
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                    }
+                } header: {
+                    Text("Sync Status")
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private var canSync: Bool {
+        guard syncManager.vaultPath != nil else { return false }
+        switch syncManager.syncStatus {
+        case .syncing, .detecting:
+            return false
+        default:
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private var syncStatusView: some View {
+        switch syncManager.syncStatus {
+        case .idle:
+            HStack(spacing: 4) {
+                Image(systemName: "circle")
+                    .foregroundStyle(.secondary)
+                Text("Ready")
+                    .foregroundStyle(.secondary)
+            }
+        case .detecting:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Detecting vault...")
+                    .foregroundStyle(.secondary)
+            }
+        case .syncing:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Syncing...")
+                    .foregroundStyle(.blue)
+            }
+        case .success(let thoughts, let conversations):
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Synced \(thoughts) thoughts, \(conversations) conversations")
+                    .foregroundStyle(.green)
+            }
+        case .error(let message):
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+                Text(message)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func selectVault() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Obsidian Vault"
+        panel.message = "Choose the folder containing your Obsidian vault"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            syncManager.setVaultPath(url)
+        }
     }
 }
 

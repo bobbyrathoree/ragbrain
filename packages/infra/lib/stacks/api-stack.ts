@@ -16,6 +16,7 @@ interface ApiStackProps extends cdk.StackProps {
   thoughtsLambda: lambda.Function;
   graphLambda: lambda.Function;
   conversationsLambda: lambda.Function;
+  exportLambda: lambda.Function;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -33,6 +34,7 @@ export class ApiStack extends cdk.Stack {
       thoughtsLambda,
       graphLambda,
       conversationsLambda,
+      exportLambda,
     } = props;
 
     // API key for v1 (will be replaced with Cognito later)
@@ -252,6 +254,17 @@ export class ApiStack extends cdk.Stack {
       integration: new apigatewayIntegrations.HttpLambdaIntegration(
         'ConversationMessagesIntegration',
         conversationsLambda
+      ),
+      authorizer,
+    });
+
+    // GET /export - Export data for Obsidian sync
+    this.api.addRoutes({
+      path: '/export',
+      methods: [apigateway.HttpMethod.GET],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'ExportIntegration',
+        exportLambda
       ),
       authorizer,
     });

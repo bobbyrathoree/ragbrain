@@ -1,17 +1,20 @@
 import { SQSEvent, SQSBatchResponse, SQSBatchItemFailure } from 'aws-lambda';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
-import { 
-  BedrockRuntimeClient, 
-  InvokeModelCommand 
+import { DynamoDBClient, UpdateItemCommand, QueryCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { KMSClient, DecryptCommand } from '@aws-sdk/client-kms';
+import {
+  BedrockRuntimeClient,
+  InvokeModelCommand
 } from '@aws-sdk/client-bedrock-runtime';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { Client } from '@opensearch-project/opensearch';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
+import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 
 const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});
+const kms = new KMSClient({});
 const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION });
 const cloudwatch = new CloudWatchClient({});
 
@@ -23,6 +26,7 @@ const {
   PROJECT_NAME,
   ENVIRONMENT,
   AWS_REGION,
+  KMS_KEY_ARN,
 } = process.env;
 
 // OpenSearch client with SigV4 signing
@@ -35,11 +39,73 @@ const opensearchClient = new Client({
   node: SEARCH_ENDPOINT,
 });
 
-interface IndexMessage {
+interface ThoughtIndexMessage {
+  type?: 'thought';
   thoughtId: string;
   user: string;
   s3Key: string;
   createdAt: string;
+}
+
+interface ConversationIndexMessage {
+  type: 'conversation';
+  conversationId: string;
+  user: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
+}
+
+type IndexMessage = ThoughtIndexMessage | ConversationIndexMessage;
+
+// DynamoDB types for conversations
+interface DynamoConversation {
+  pk: string;
+  sk: string;
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  status: string;
+}
+
+interface DynamoMessage {
+  pk: string;
+  sk: string;
+  id: string;
+  conversationId: string;
+  role: string;
+  content: string; // Encrypted
+  citations?: any[];
+  searchedThoughts?: string[];
+  confidence?: number;
+  createdAt: number;
+  user: string;
+}
+
+// Encryption context for KMS
+interface EncryptionContext {
+  conversationId: string;
+  messageId: string;
+  userId: string;
+}
+
+// Decrypt message content using KMS
+async function decryptContent(ciphertext: string, context: EncryptionContext): Promise<string> {
+  const response = await kms.send(new DecryptCommand({
+    CiphertextBlob: Buffer.from(ciphertext, 'base64'),
+    EncryptionContext: {
+      conversationId: context.conversationId,
+      messageId: context.messageId,
+      userId: context.userId,
+    },
+  }));
+
+  if (!response.Plaintext) {
+    throw new Error('KMS decryption failed - no plaintext returned');
+  }
+
+  return new TextDecoder().decode(response.Plaintext);
 }
 
 interface ThoughtDocument {
@@ -260,7 +326,7 @@ async function findRelatedThoughts(thoughtId: string, embedding: number[], user:
   }
 }
 
-async function processThought(message: IndexMessage): Promise<void> {
+async function processThought(message: ThoughtIndexMessage): Promise<void> {
   const startTime = Date.now();
   
   // Fetch thought from S3
@@ -376,18 +442,231 @@ async function processThought(message: IndexMessage): Promise<void> {
   });
 }
 
+// Process conversation for indexing
+async function processConversation(message: ConversationIndexMessage): Promise<void> {
+  const startTime = Date.now();
+  const { conversationId, user } = message;
+
+  // Fetch conversation metadata
+  const convResult = await dynamodb.send(new GetItemCommand({
+    TableName: TABLE_NAME,
+    Key: marshall({
+      pk: `user#${user}`,
+      sk: `conv#${conversationId}`,
+    }),
+  }));
+
+  if (!convResult.Item) {
+    console.error(`Conversation not found: ${conversationId}`);
+    return;
+  }
+
+  const conversation = unmarshall(convResult.Item) as DynamoConversation;
+
+  // Fetch all messages
+  const msgResult = await dynamodb.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'pk = :pk AND begins_with(sk, :skPrefix)',
+    ExpressionAttributeValues: {
+      ':pk': { S: `conv#${conversationId}` },
+      ':skPrefix': { S: 'msg#' },
+    },
+    ScanIndexForward: true, // Chronological order
+  }));
+
+  if (!msgResult.Items || msgResult.Items.length === 0) {
+    console.log(`No messages to index for conversation: ${conversationId}`);
+    return;
+  }
+
+  // Decrypt and concatenate messages
+  const decryptedMessages: Array<{ role: string; content: string; citations?: any[] }> = [];
+  const allCitedThoughtIds: Set<string> = new Set();
+  const allTags: Set<string> = new Set();
+
+  for (const item of msgResult.Items) {
+    const msg = unmarshall(item) as DynamoMessage;
+    const encContext: EncryptionContext = {
+      conversationId: msg.conversationId,
+      messageId: msg.id,
+      userId: user,
+    };
+
+    try {
+      const decryptedContent = await decryptContent(msg.content, encContext);
+      decryptedMessages.push({
+        role: msg.role,
+        content: decryptedContent,
+        citations: msg.citations,
+      });
+
+      // Collect cited thought IDs and their tags
+      if (msg.citations) {
+        for (const citation of msg.citations) {
+          if (citation.id) allCitedThoughtIds.add(citation.id);
+          if (citation.tags) {
+            for (const tag of citation.tags) {
+              allTags.add(tag);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to decrypt message ${msg.id}:`, error);
+    }
+  }
+
+  if (decryptedMessages.length === 0) {
+    console.log(`No messages could be decrypted for conversation: ${conversationId}`);
+    return;
+  }
+
+  // Build concatenated text for embedding and search
+  const concatenatedText = decryptedMessages
+    .map(m => `${m.role === 'user' ? 'Q' : 'A'}: ${m.content}`)
+    .join('\n\n');
+
+  // Generate embedding
+  const embedding = await generateEmbedding(concatenatedText);
+
+  // Generate summary of the conversation
+  const summary = await generateConversationSummary(conversation.title, decryptedMessages);
+
+  // Index to OpenSearch with docType discriminator
+  const searchDocument = {
+    id: conversationId,
+    docType: 'conversation',
+    title: conversation.title,
+    text: concatenatedText,
+    summary,
+    tags: Array.from(allTags),
+    messageCount: decryptedMessages.length,
+    citedThoughtIds: Array.from(allCitedThoughtIds),
+    created_at_epoch: conversation.createdAt,
+    updated_at_epoch: conversation.updatedAt,
+    embedding,
+    user,
+  };
+
+  await opensearchClient.index({
+    index: `${SEARCH_COLLECTION}-thoughts`, // Same index, distinguished by docType
+    id: conversationId, // Use conversation ID to enable upsert
+    body: searchDocument,
+    refresh: false,
+  });
+
+  // Update conversation with indexedAt timestamp
+  await dynamodb.send(new UpdateItemCommand({
+    TableName: TABLE_NAME,
+    Key: marshall({
+      pk: `user#${user}`,
+      sk: `conv#${conversationId}`,
+    }),
+    UpdateExpression: 'SET #indexedAt = :indexedAt',
+    ExpressionAttributeNames: {
+      '#indexedAt': 'indexedAt',
+    },
+    ExpressionAttributeValues: {
+      ':indexedAt': { N: Date.now().toString() },
+    },
+  }));
+
+  // Emit metrics
+  await cloudwatch.send(new PutMetricDataCommand({
+    Namespace: PROJECT_NAME,
+    MetricData: [
+      {
+        MetricName: 'IndexLatency',
+        Value: Date.now() - startTime,
+        Unit: 'Milliseconds',
+        Dimensions: [
+          { Name: 'Environment', Value: ENVIRONMENT },
+          { Name: 'Type', Value: 'conversation' },
+        ],
+      },
+      {
+        MetricName: 'ConversationIndexed',
+        Value: 1,
+        Unit: 'Count',
+        Dimensions: [
+          { Name: 'Environment', Value: ENVIRONMENT },
+        ],
+      },
+    ],
+  })).catch(err => {
+    console.error('Failed to emit metrics:', err);
+  });
+
+  console.log(`Successfully indexed conversation: ${conversationId} with ${decryptedMessages.length} messages`);
+}
+
+// Generate a summary of the conversation
+async function generateConversationSummary(
+  title: string,
+  messages: Array<{ role: string; content: string }>
+): Promise<string> {
+  if (messages.length === 0) return title;
+
+  // For short conversations, just use title + first exchange
+  if (messages.length <= 2) {
+    const firstQ = messages.find(m => m.role === 'user');
+    return firstQ ? `${title}: ${firstQ.content.substring(0, 100)}` : title;
+  }
+
+  // For longer conversations, use Claude to summarize
+  const conversationText = messages
+    .slice(0, 6) // First 6 messages max
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .join('\n');
+
+  try {
+    const input = {
+      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: 100,
+        temperature: 0.3,
+        messages: [
+          {
+            role: 'user',
+            content: `Summarize this conversation in one sentence (max 20 words). Focus on the main topic discussed:\n\n${conversationText}`,
+          },
+        ],
+      }),
+    };
+
+    const command = new InvokeModelCommand(input);
+    const response = await bedrock.send(command);
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    return result.content[0].text.trim();
+  } catch (error) {
+    console.error('Conversation summary generation failed:', error);
+    return title;
+  }
+}
+
 export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const batchItemFailures: SQSBatchItemFailure[] = [];
-  
+
   // Process messages in parallel with concurrency limit
   const processingPromises = event.Records.map(async (record) => {
     try {
       const message: IndexMessage = JSON.parse(record.body);
-      console.log(`Processing thought: ${message.thoughtId}`);
-      
-      await processThought(message);
-      
-      console.log(`Successfully indexed thought: ${message.thoughtId}`);
+
+      // Route based on message type
+      if (message.type === 'conversation') {
+        console.log(`Processing conversation: ${message.conversationId}`);
+        await processConversation(message);
+        console.log(`Successfully indexed conversation: ${message.conversationId}`);
+      } else {
+        // Default to thought processing (backwards compatible)
+        const thoughtMessage = message as ThoughtIndexMessage;
+        console.log(`Processing thought: ${thoughtMessage.thoughtId}`);
+        await processThought(thoughtMessage);
+        console.log(`Successfully indexed thought: ${thoughtMessage.thoughtId}`);
+      }
     } catch (error) {
       console.error(`Failed to process message ${record.messageId}:`, error);
       

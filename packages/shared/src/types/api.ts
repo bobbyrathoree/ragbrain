@@ -53,9 +53,20 @@ export interface Citation {
   tags?: string[];
 }
 
+// Conversation hit from search results
+export interface ConversationHit {
+  id: string;
+  title: string;
+  preview: string;
+  messageCount: number;
+  score: number;
+  createdAt: string;
+}
+
 export interface AskResponse {
   answer: string;
   citations: Citation[];
+  conversationHits?: ConversationHit[]; // Related past conversations
   confidence?: number;
   processingTime?: number;
 }

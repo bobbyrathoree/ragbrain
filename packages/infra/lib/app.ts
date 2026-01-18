@@ -60,6 +60,7 @@ const apiStack = new ApiStack(app, `${project}-api-${env}`, {
   thoughtsLambda: computeStack.thoughtsLambda,
   graphLambda: computeStack.graphLambda,
   conversationsLambda: computeStack.conversationsLambda,
+  exportLambda: computeStack.exportLambda,
 });
 
 // Monitoring and alerting
@@ -73,6 +74,7 @@ const monitoringStack = new MonitoringStack(app, `${project}-monitoring-${env}`,
     computeStack.indexerLambda,
     computeStack.askLambda,
     computeStack.conversationsLambda,
+    computeStack.exportLambda,
   ],
   dlq: storageStack.dlq,
 });

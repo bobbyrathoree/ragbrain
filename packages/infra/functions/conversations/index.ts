@@ -698,19 +698,34 @@ async function processMessage(
     },
   }));
 
-  // Queue for indexing (optional - could skip for now)
+  // Queue for indexing with debouncing (30 second minimum between re-indexes)
   if (QUEUE_URL) {
     try {
-      await sqs.send(new SendMessageCommand({
-        QueueUrl: QUEUE_URL,
-        MessageBody: JSON.stringify({
-          type: 'conversation',
-          conversationId,
-          userMessageId,
-          assistantMessageId,
-          user,
+      // Check last indexed timestamp to debounce
+      const convCheck = await dynamodb.send(new GetItemCommand({
+        TableName: TABLE_NAME,
+        Key: marshall({
+          pk: `user#${user}`,
+          sk: `conv#${conversationId}`,
         }),
+        ProjectionExpression: 'indexedAt',
       }));
+
+      const lastIndexed = convCheck.Item?.indexedAt?.N
+        ? parseInt(convCheck.Item.indexedAt.N)
+        : 0;
+
+      // Only queue if last index was >30 seconds ago
+      if (Date.now() - lastIndexed > 30000) {
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: QUEUE_URL,
+          MessageBody: JSON.stringify({
+            type: 'conversation',
+            conversationId,
+            user,
+          }),
+        }));
+      }
     } catch (error) {
       console.error('Failed to queue conversation for indexing:', error);
     }
