@@ -248,6 +248,23 @@ async function hybridSearch(
   }
 }
 
+/**
+ * Normalize scores to 0-1 range using min-max scaling
+ */
+function normalizeScores<T extends { score: number }>(items: T[]): T[] {
+  if (items.length === 0) return items;
+
+  const scores = items.map(item => item.score);
+  const min = Math.min(...scores);
+  const max = Math.max(...scores);
+  const range = max - min || 1; // Avoid division by zero
+
+  return items.map(item => ({
+    ...item,
+    score: Number(((item.score - min) / range).toFixed(3)),
+  }));
+}
+
 function scoreAndRank(hits: SearchHit[]): SearchHit[] {
   // Score fusion: combine different signals
   const scoredHits = hits.map(hit => {
@@ -487,11 +504,17 @@ export const handler = async (
       console.error('Failed to emit metrics:', err);
     });
     
+    // Normalize citation scores to 0-1 range for consistent API response
+    const normalizedCitations = normalizeScores(citations.slice(0, body.limit || 5));
+    const normalizedConversationHits = conversationHits.length > 0
+      ? normalizeScores(conversationHits)
+      : undefined;
+
     // Return response
     const response: AskResponse = {
       answer,
-      citations: citations.slice(0, body.limit || 5),
-      conversationHits: conversationHits.length > 0 ? conversationHits : undefined,
+      citations: normalizedCitations,
+      conversationHits: normalizedConversationHits,
       confidence,
       processingTime,
     };

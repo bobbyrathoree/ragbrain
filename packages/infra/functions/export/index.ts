@@ -247,12 +247,13 @@ async function exportConversations(user: string, since: number): Promise<Convers
   return conversations;
 }
 
+// Batch size for parallel KMS decryption (avoid overwhelming KMS)
+const DECRYPT_BATCH_SIZE = 10;
+
 async function fetchConversationMessages(
   conversationId: string,
   user: string
 ): Promise<MessageExport[]> {
-  const messages: MessageExport[] = [];
-
   const result = await dynamodb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'pk = :pk AND begins_with(sk, :skPrefix)',
@@ -263,36 +264,46 @@ async function fetchConversationMessages(
     ScanIndexForward: true, // Chronological order
   }));
 
-  for (const item of result.Items || []) {
-    const msg = unmarshall(item) as DynamoMessage;
+  const rawMessages = (result.Items || []).map(item => unmarshall(item) as DynamoMessage);
 
-    // Decrypt content
-    let content: string;
-    try {
-      const encContext: EncryptionContext = {
-        conversationId: msg.conversationId,
-        messageId: msg.id,
-        userId: user,
-      };
-      content = await decryptContent(msg.content, encContext);
-    } catch (error) {
-      console.error(`Failed to decrypt message ${msg.id}:`, error);
-      content = '[Decryption failed]';
-    }
+  // Batch decrypt messages in parallel for better performance
+  const decryptedMessages: MessageExport[] = [];
 
-    messages.push({
-      role: msg.role as 'user' | 'assistant',
-      content,
-      citations: msg.citations?.map(c => ({
-        id: c.id,
-        preview: c.preview,
-        createdAt: c.createdAt,
-      })),
-      createdAt: new Date(msg.createdAt).toISOString(),
-    });
+  for (let i = 0; i < rawMessages.length; i += DECRYPT_BATCH_SIZE) {
+    const batch = rawMessages.slice(i, i + DECRYPT_BATCH_SIZE);
+
+    const batchResults = await Promise.all(
+      batch.map(async (msg): Promise<MessageExport> => {
+        let content: string;
+        try {
+          const encContext: EncryptionContext = {
+            conversationId: msg.conversationId,
+            messageId: msg.id,
+            userId: user,
+          };
+          content = await decryptContent(msg.content, encContext);
+        } catch (error) {
+          console.error(`Failed to decrypt message ${msg.id}:`, error);
+          content = '[Decryption failed]';
+        }
+
+        return {
+          role: msg.role as 'user' | 'assistant',
+          content,
+          citations: msg.citations?.map(c => ({
+            id: c.id,
+            preview: c.preview,
+            createdAt: c.createdAt,
+          })),
+          createdAt: new Date(msg.createdAt).toISOString(),
+        };
+      })
+    );
+
+    decryptedMessages.push(...batchResults);
   }
 
-  return messages;
+  return decryptedMessages;
 }
 
 async function getDeletedIds(user: string, since: number): Promise<string[]> {

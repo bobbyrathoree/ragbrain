@@ -530,16 +530,27 @@ async function getConversation(
       content = '[Decryption failed]';
     }
 
-    messages.push({
+    // Build message with only defined fields (avoid null/undefined in response)
+    const message: ConversationMessage = {
       id: msg.id,
       conversationId: msg.conversationId,
       role: msg.role as 'user' | 'assistant',
       content,
-      citations: msg.citations,
-      searchedThoughts: msg.searchedThoughts,
-      confidence: msg.confidence,
       createdAt: new Date(msg.createdAt).toISOString(),
-    });
+    };
+
+    // Only include optional fields if they exist
+    if (msg.citations && msg.citations.length > 0) {
+      message.citations = msg.citations;
+    }
+    if (msg.searchedThoughts && msg.searchedThoughts.length > 0) {
+      message.searchedThoughts = msg.searchedThoughts;
+    }
+    if (msg.confidence !== undefined && msg.confidence !== null) {
+      message.confidence = msg.confidence;
+    }
+
+    messages.push(message);
   }
 
   let nextCursor: string | undefined;
@@ -698,7 +709,10 @@ async function processMessage(
     },
   }));
 
-  // Queue for indexing with debouncing (30 second minimum between re-indexes)
+  // Queue for indexing with debouncing (10 second minimum between re-indexes)
+  // Safe margin: indexer has 10 reserved concurrency and SQS batching (5 msgs/5s)
+  const INDEXING_DEBOUNCE_MS = 10000;
+
   if (QUEUE_URL) {
     try {
       // Check last indexed timestamp to debounce
@@ -715,8 +729,8 @@ async function processMessage(
         ? parseInt(convCheck.Item.indexedAt.N)
         : 0;
 
-      // Only queue if last index was >30 seconds ago
-      if (Date.now() - lastIndexed > 30000) {
+      // Only queue if last index was > debounce threshold ago
+      if (Date.now() - lastIndexed > INDEXING_DEBOUNCE_MS) {
         await sqs.send(new SendMessageCommand({
           QueueUrl: QUEUE_URL,
           MessageBody: JSON.stringify({

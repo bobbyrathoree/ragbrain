@@ -7,7 +7,6 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as opensearch from 'aws-cdk-lib/aws-opensearchserverless';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -24,12 +23,15 @@ interface ComputeStackProps extends cdk.StackProps {
 
 export class ComputeStack extends cdk.Stack {
   public readonly captureLambda: lambda.Function;
+  public readonly captureLambdaAlias: lambda.Alias;
   public readonly indexerLambda: lambda.Function;
   public readonly askLambda: lambda.Function;
+  public readonly askLambdaAlias: lambda.Alias;
   public readonly thoughtsLambda: lambda.Function;
   public readonly graphLambda: lambda.Function;
   public readonly conversationsLambda: lambda.Function;
   public readonly exportLambda: lambda.Function;
+  public readonly sharedLayer: lambda.LayerVersion;
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
@@ -45,7 +47,7 @@ export class ComputeStack extends cdk.Stack {
     } = props;
 
     // Shared Lambda layer for common dependencies
-    const sharedLayer = new lambda.LayerVersion(this, 'SharedLayer', {
+    this.sharedLayer = new lambda.LayerVersion(this, 'SharedLayer', {
       code: lambda.Code.fromAsset(path.join(__dirname, '../../layers/shared')),
       compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
       description: 'Shared dependencies for all Lambda functions',
@@ -122,7 +124,7 @@ export class ComputeStack extends cdk.Stack {
         ...commonEnv,
         QUEUE_URL: indexQueue.queueUrl,
       },
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });
@@ -131,6 +133,13 @@ export class ComputeStack extends cdk.Stack {
     storageBucket.grantWrite(this.captureLambda);
     thoughtsTable.grantWriteData(this.captureLambda);
     indexQueue.grantSendMessages(this.captureLambda);
+
+    // Provisioned concurrency alias for Capture Lambda (reduce cold starts)
+    this.captureLambdaAlias = new lambda.Alias(this, 'CaptureLambdaAlias', {
+      aliasName: 'live',
+      version: this.captureLambda.currentVersion,
+      provisionedConcurrentExecutions: environment === 'prod' ? 2 : 1,
+    });
 
     // Indexer Lambda - processes thoughts and conversations for search
     this.indexerLambda = new lambdaNodejs.NodejsFunction(this, 'IndexerLambda', {
@@ -144,7 +153,7 @@ export class ComputeStack extends cdk.Stack {
         ...commonEnv,
         KMS_KEY_ARN: encryptionKey.keyArn, // For decrypting conversation messages
       },
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       reservedConcurrentExecutions: 10, // Limit concurrency to avoid Bedrock throttling
       bundling: bundlingOptions,
@@ -185,7 +194,7 @@ export class ComputeStack extends cdk.Stack {
       memorySize: 1024,
       timeout: cdk.Duration.seconds(60),
       environment: commonEnv,
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });
@@ -203,6 +212,13 @@ export class ComputeStack extends cdk.Stack {
       })
     );
 
+    // Provisioned concurrency alias for Ask Lambda (reduce cold starts)
+    this.askLambdaAlias = new lambda.Alias(this, 'AskLambdaAlias', {
+      aliasName: 'live',
+      version: this.askLambda.currentVersion,
+      provisionedConcurrentExecutions: environment === 'prod' ? 3 : 2,
+    });
+
     // Thoughts Lambda - lists and filters thoughts
     this.thoughtsLambda = new lambdaNodejs.NodejsFunction(this, 'ThoughtsLambda', {
       functionName: `${projectName}-thoughts-${environment}`,
@@ -212,7 +228,7 @@ export class ComputeStack extends cdk.Stack {
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
       environment: commonEnv,
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });
@@ -231,7 +247,7 @@ export class ComputeStack extends cdk.Stack {
         ...commonEnv,
         GRAPH_BUCKET: storageBucket.bucketName,
       },
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });
@@ -262,7 +278,7 @@ export class ComputeStack extends cdk.Stack {
         KMS_KEY_ARN: encryptionKey.keyArn,
         QUEUE_URL: indexQueue.queueUrl,
       },
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });
@@ -294,7 +310,7 @@ export class ComputeStack extends cdk.Stack {
         ...commonEnv,
         KMS_KEY_ARN: encryptionKey.keyArn, // For decrypting conversation messages
       },
-      layers: [sharedLayer],
+      layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });

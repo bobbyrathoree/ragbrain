@@ -75,20 +75,25 @@ function buildQueryParams(
       queryParams.ExpressionAttributeValues[':to'] = { S: `ts#${toEpoch}` };
     }
   } else {
-    // Default query by user
-    queryParams.KeyConditionExpression = 'pk = :userKey';
+    // Default query by user - only get thoughts (sk BEGINS_WITH ts#), not conversations
+    queryParams.KeyConditionExpression = 'pk = :userKey AND begins_with(sk, :skPrefix)';
     queryParams.ExpressionAttributeValues = {
       ':userKey': { S: `user#${user}` },
+      ':skPrefix': { S: 'ts#' },
     };
-    
+
     // Add date range if specified
     if (params.from || params.to) {
       const fromEpoch = params.from ? new Date(params.from).getTime() : 0;
       const toEpoch = params.to ? new Date(params.to).getTime() : Date.now();
-      
-      queryParams.KeyConditionExpression += ' AND sk BETWEEN :from AND :to';
-      queryParams.ExpressionAttributeValues[':from'] = { S: `ts#${fromEpoch}#` };
-      queryParams.ExpressionAttributeValues[':to'] = { S: `ts#${toEpoch}~` }; // ~ ensures we get everything in range
+
+      // For date range queries, use BETWEEN which works with the ts# prefix
+      queryParams.KeyConditionExpression = 'pk = :userKey AND sk BETWEEN :from AND :to';
+      queryParams.ExpressionAttributeValues = {
+        ':userKey': { S: `user#${user}` },
+        ':from': { S: `ts#${fromEpoch}#` },
+        ':to': { S: `ts#${toEpoch}~` },
+      };
     }
   }
   

@@ -7,3 +7,5 @@ export * from './types/search';
 export * from './utils/validation';
 export * from './utils/time';
 export * from './utils/smartId';
+export * from './utils/errors';
+export * from './utils/response';

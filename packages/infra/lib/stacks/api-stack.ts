@@ -3,20 +3,26 @@ import * as apigateway from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayIntegrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayAuthorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as waf from 'aws-cdk-lib/aws-wafv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+import * as path from 'path';
 
 interface ApiStackProps extends cdk.StackProps {
   projectName: string;
   environment: string;
-  captureLambda: lambda.Function;
-  askLambda: lambda.Function;
+  captureLambda: lambda.IFunction;
+  askLambda: lambda.IFunction;
   thoughtsLambda: lambda.Function;
   graphLambda: lambda.Function;
   conversationsLambda: lambda.Function;
   exportLambda: lambda.Function;
+  apiKeySecret: secretsmanager.ISecret;
+  thoughtsTable: dynamodb.ITable;
+  sharedLayer: lambda.ILayerVersion;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -35,65 +41,47 @@ export class ApiStack extends cdk.Stack {
       graphLambda,
       conversationsLambda,
       exportLambda,
+      apiKeySecret,
+      thoughtsTable,
+      sharedLayer,
     } = props;
 
-    // API key for v1 (will be replaced with Cognito later)
-    const apiKeySecret = new secretsmanager.Secret(this, 'ApiKey', {
-      secretName: `${projectName}/${environment}/api-key`,
-      description: 'API key for Ragbrain v1',
-      generateSecretString: {
-        secretStringTemplate: JSON.stringify({}),
-        generateStringKey: 'key',
-        excludeCharacters: ' %+~`#$&*()|[]{}:;<>?!\'/@"\\',
-        passwordLength: 32,
+    // Common bundling options
+    const bundlingOptions = {
+      minify: environment === 'prod',
+      sourceMap: environment !== 'prod',
+      externalModules: [
+        '@aws-sdk/*',
+        '@opensearch-project/opensearch',
+        '@opensearch-project/opensearch/*',
+        'uuid',
+      ],
+      forceDockerBundling: false,
+      define: {
+        'process.env.NODE_ENV': JSON.stringify(environment),
       },
-    });
+    };
 
-    // Custom authorizer Lambda
-    const authorizerLambda = new lambda.Function(this, 'AuthorizerLambda', {
-      functionName: `${projectName}-authorizer-${environment}`,
+    // Authorizer Lambda - handles API key validation and rate limiting
+    const authorizerLambda = new lambdaNodejs.NodejsFunction(this, 'AuthorizerLambdaV2', {
+      functionName: `${projectName}-authorizer-v2-${environment}`,
+      entry: path.join(__dirname, '../../functions/authorizer/index.ts'),
+      handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromInline(`
-        const AWS = require('@aws-sdk/client-secrets-manager');
-        const secretsManager = new AWS.SecretsManager();
-        
-        exports.handler = async (event) => {
-          const apiKey = event.headers['x-api-key'];
-          
-          if (!apiKey) {
-            return {
-              isAuthorized: false,
-            };
-          }
-          
-          try {
-            const secret = await secretsManager.getSecretValue({
-              SecretId: '${apiKeySecret.secretArn}',
-            });
-            
-            const { key } = JSON.parse(secret.SecretString);
-            
-            return {
-              isAuthorized: apiKey === key,
-              context: {
-                user: 'dev', // Single user for v1
-              },
-            };
-          } catch (error) {
-            console.error('Authorization error:', error);
-            return {
-              isAuthorized: false,
-            };
-          }
-        };
-      `),
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
       environment: {
+        TABLE_NAME: thoughtsTable.tableName,
+        RATE_LIMIT_PER_HOUR: environment === 'prod' ? '10000' : '1000',
         SECRET_ARN: apiKeySecret.secretArn,
       },
-      timeout: cdk.Duration.seconds(10),
+      layers: [sharedLayer],
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: bundlingOptions,
     });
 
+    // Grant permissions for Authorizer Lambda
+    thoughtsTable.grantReadWriteData(authorizerLambda);
     apiKeySecret.grantRead(authorizerLambda);
 
     // Create HTTP API

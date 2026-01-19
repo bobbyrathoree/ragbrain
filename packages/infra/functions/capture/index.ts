@@ -1,6 +1,6 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { v4 as uuidv4 } from 'uuid';
@@ -155,7 +155,23 @@ export const handler = async (
         throw error;
       }
     });
-    
+
+    // Update lastDataChange timestamp for graph cache invalidation
+    await dynamodb.send(new UpdateItemCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        pk: { S: `user#${user}` },
+        sk: { S: 'meta' },
+      },
+      UpdateExpression: 'SET lastDataChange = :ts',
+      ExpressionAttributeValues: {
+        ':ts': { N: Date.now().toString() },
+      },
+    })).catch(err => {
+      // Non-critical - don't fail capture for cache invalidation tracking
+      console.error('Failed to update lastDataChange:', err);
+    });
+
     // Queue for indexing
     await sqs.send(new SendMessageCommand({
       QueueUrl: QUEUE_URL,

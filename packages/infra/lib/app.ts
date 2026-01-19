@@ -61,6 +61,9 @@ const apiStack = new ApiStack(app, `${project}-api-${env}`, {
   graphLambda: computeStack.graphLambda,
   conversationsLambda: computeStack.conversationsLambda,
   exportLambda: computeStack.exportLambda,
+  apiKeySecret: storageStack.apiKeySecret,
+  thoughtsTable: storageStack.thoughtsTable,
+  sharedLayer: computeStack.sharedLayer,
 });
 
 // Monitoring and alerting

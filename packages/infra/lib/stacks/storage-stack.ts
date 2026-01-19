@@ -3,6 +3,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 interface StorageStackProps extends cdk.StackProps {
@@ -16,6 +17,7 @@ export class StorageStack extends cdk.Stack {
   public readonly indexQueue: sqs.Queue;
   public readonly dlq: sqs.Queue;
   public readonly encryptionKey: kms.Key;
+  public readonly apiKeySecret: secretsmanager.ISecret;
 
   constructor(scope: Construct, id: string, props: StorageStackProps) {
     super(scope, id, props);
@@ -27,10 +29,18 @@ export class StorageStack extends cdk.Stack {
       description: `${projectName} encryption key for ${environment}`,
       enableKeyRotation: true,
       alias: `${projectName}-${environment}`,
-      removalPolicy: environment === 'prod' 
-        ? cdk.RemovalPolicy.RETAIN 
+      removalPolicy: environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
         : cdk.RemovalPolicy.DESTROY,
     });
+
+    // API key for v1 (will be replaced with Cognito later)
+    // Import existing secret from api-stack migration
+    this.apiKeySecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'ApiKey',
+      `${projectName}/${environment}/api-key`
+    );
 
     // S3 bucket for raw thought storage
     this.storageBucket = new s3.Bucket(this, 'StorageBucket', {
@@ -172,6 +182,11 @@ export class StorageStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'QueueUrl', {
       value: this.indexQueue.queueUrl,
       description: 'SQS queue URL for indexing',
+    });
+
+    new cdk.CfnOutput(this, 'ApiKeySecretArn', {
+      value: this.apiKeySecret.secretArn,
+      description: 'API key secret ARN',
     });
 
     // Tags

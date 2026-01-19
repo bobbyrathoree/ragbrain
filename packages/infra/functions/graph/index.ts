@@ -1,6 +1,6 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { DynamoDBClient, ScanCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, ScanCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { Client } from '@opensearch-project/opensearch';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
@@ -362,24 +362,46 @@ export const handler = async (
     
     // Check if we have a cached version
     const cacheKey = `graph/${user}/${params.month || 'all'}.json`;
-    
+
+    // Get user metadata to check lastDataChange for cache invalidation
+    let lastDataChange = 0;
+    try {
+      const metaResult = await dynamodb.send(new GetItemCommand({
+        TableName: TABLE_NAME,
+        Key: {
+          pk: { S: `user#${user}` },
+          sk: { S: 'meta' },
+        },
+        ProjectionExpression: 'lastDataChange',
+      }));
+      lastDataChange = metaResult.Item?.lastDataChange?.N
+        ? parseInt(metaResult.Item.lastDataChange.N)
+        : 0;
+    } catch (error) {
+      console.error('Failed to get user metadata:', error);
+    }
+
     try {
       const cachedGraph = await s3.send(new GetObjectCommand({
         Bucket: GRAPH_BUCKET || BUCKET_NAME,
         Key: cacheKey,
       }));
-      
+
       const cacheAge = Date.now() - (cachedGraph.LastModified?.getTime() || 0);
+      const cacheTimestamp = cachedGraph.LastModified?.getTime() || 0;
       const maxCacheAge = 3600000; // 1 hour
-      
-      if (cacheAge < maxCacheAge) {
+
+      // Cache is valid if: not too old AND no data changes since cache was created
+      const isCacheValid = cacheAge < maxCacheAge && cacheTimestamp > lastDataChange;
+
+      if (isCacheValid) {
         const graphData = JSON.parse(
           await cachedGraph.Body!.transformToString()
         );
-        
+
         return {
           statusCode: 200,
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             'Cache-Control': 'max-age=3600',
             'X-Cache': 'HIT',
