@@ -21,7 +21,7 @@ async function apiNoAuth<T = unknown>(
   path: string,
   body?: unknown
 ): Promise<{ status: number; data: T }> {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const url = `${API_URL}${path}`;
 
   const controller = new AbortController();
@@ -60,7 +60,7 @@ async function apiWithHeaders<T = unknown>(
   headers: Record<string, string>,
   body?: unknown
 ): Promise<{ status: number; data: T }> {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const url = `${API_URL}${path}`;
 
   const controller = new AbortController();

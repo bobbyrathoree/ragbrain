@@ -2,13 +2,15 @@
  * Test utilities for Ragbrain API testing
  */
 
-// Load from environment or use defaults
-const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+// Load from environment - both are required
+const API_URL = process.env.RAGBRAIN_API_URL || '';
 const API_KEY = process.env.RAGBRAIN_API_KEY || '';
 
-if (!API_KEY) {
-  console.error('\n❌ RAGBRAIN_API_KEY environment variable is required');
-  console.error('   Set it with: export RAGBRAIN_API_KEY=your-api-key\n');
+if (!API_URL || !API_KEY) {
+  console.error('\n❌ Required environment variables are missing:');
+  if (!API_URL) console.error('   - RAGBRAIN_API_URL: Your API Gateway endpoint');
+  if (!API_KEY) console.error('   - RAGBRAIN_API_KEY: Your API key');
+  console.error('\n   Copy .env.example to .env and fill in your values\n');
   process.exit(1);
 }
 

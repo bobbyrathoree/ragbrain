@@ -63,7 +63,7 @@ await test('API Gateway: Responds to requests', async () => {
 });
 
 await test('API Gateway: Returns proper CORS headers (if configured)', async () => {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const API_KEY = process.env.RAGBRAIN_API_KEY || '';
 
   const response = await fetch(`${API_URL}/thoughts?limit=1`, {
@@ -86,7 +86,7 @@ await test('API Gateway: Returns proper CORS headers (if configured)', async () 
 });
 
 await test('API Gateway: Handles OPTIONS preflight', async () => {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
 
   const response = await fetch(`${API_URL}/thoughts`, {
     method: 'OPTIONS',
@@ -154,7 +154,7 @@ await test('Lambda: Graph function working', async () => {
 });
 
 await test('Lambda: Authorizer function working', async () => {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
 
   // Test without auth - should be rejected
   const noAuthResponse = await fetch(`${API_URL}/thoughts?limit=1`, {

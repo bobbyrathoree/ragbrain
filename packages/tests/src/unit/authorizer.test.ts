@@ -18,7 +18,7 @@ async function apiNoAuth<T = unknown>(
   path: string,
   body?: unknown
 ): Promise<{ status: number; data: T; headers: Headers }> {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const url = `${API_URL}${path}`;
 
   const options: RequestInit = {
@@ -52,7 +52,7 @@ async function apiWithHeaders<T = unknown>(
   headers: Record<string, string>,
   body?: unknown
 ): Promise<{ status: number; data: T; headers: Headers }> {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const url = `${API_URL}${path}`;
 
   const options: RequestInit = {
@@ -144,7 +144,7 @@ await test('RateLimit: Normal requests succeed', async () => {
 });
 
 await test('RateLimit: Response includes rate limit headers (if implemented)', async () => {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const API_KEY = process.env.RAGBRAIN_API_KEY || '';
 
   const response = await fetch(`${API_URL}/thoughts?limit=1`, {

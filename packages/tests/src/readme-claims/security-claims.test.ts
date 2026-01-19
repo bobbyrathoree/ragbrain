@@ -286,7 +286,7 @@ await test('Claim: No sensitive data in error details', async () => {
 // Claim: API authentication required
 
 await test('Claim: All endpoints require authentication', async () => {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
 
   const endpoints = [
     { method: 'GET', path: '/thoughts' },

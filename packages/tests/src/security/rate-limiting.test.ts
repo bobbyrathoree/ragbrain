@@ -43,7 +43,7 @@ await test('Normal requests within rate limit succeed', async () => {
 
 // Test 2: Verify rate limit headers are present
 await test('Response includes rate limit headers (if implemented)', async () => {
-  const API_URL = process.env.RAGBRAIN_API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+  const API_URL = process.env.RAGBRAIN_API_URL!;
   const API_KEY = process.env.RAGBRAIN_API_KEY || '';
 
   const response = await fetch(`${API_URL}/thoughts?limit=1`, {
