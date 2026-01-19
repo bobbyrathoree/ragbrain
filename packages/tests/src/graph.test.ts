@@ -115,10 +115,10 @@ await test('GET /graph - edges array structure', async () => {
     assertType(edge.target, 'string', 'target should be a string');
     assertType(edge.similarity, 'number', 'similarity should be a number');
 
-    // Similarity should be between 0 and 1
+    // Similarity should be between 0 and 1 (allow small floating point imprecision)
     assert(
-      edge.similarity >= 0 && edge.similarity <= 1,
-      `Edge similarity should be between 0 and 1, got ${edge.similarity}`
+      edge.similarity >= 0 && edge.similarity <= 1.0001,
+      `Edge similarity should be between 0 and ~1, got ${edge.similarity}`
     );
   }
 });

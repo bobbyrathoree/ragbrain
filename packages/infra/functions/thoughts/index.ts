@@ -237,8 +237,19 @@ export const handler = async (
 ): Promise<APIGatewayProxyResultV2> => {
   const startTime = Date.now();
 
-  // Get user from authorizer
-  const user = event.requestContext.authorizer?.lambda?.user || 'dev';
+  // Get user from authorizer (must be set by authorizer)
+  const user = event.requestContext.authorizer?.lambda?.user;
+  if (!user) {
+    console.error('CRITICAL: User context missing from authorizer');
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'InternalServerError',
+        message: 'Authentication context missing',
+      }),
+    };
+  }
 
   // Route based on path
   const path = event.rawPath || '';

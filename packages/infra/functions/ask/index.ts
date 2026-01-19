@@ -343,19 +343,23 @@ Answer with citations:`;
       usedCitations.add(parseInt(match[1]) - 1);
     }
     
-    // Build citation list
+    // Build citation list with relevance threshold
+    const MIN_CITATION_SCORE = 0.3;
     const citations: Citation[] = [];
     for (const index of usedCitations) {
       if (index < context.length) {
         const hit = context[index];
-        citations.push({
-          id: hit._source.id,
-          createdAt: new Date(hit._source.created_at_epoch).toISOString(),
-          preview: hit._source.summary || hit._source.text.substring(0, 200),
-          score: hit._score,
-          type: hit._source.type,
-          tags: hit._source.tags,
-        });
+        // Only include citations above minimum relevance threshold
+        if (hit._score >= MIN_CITATION_SCORE) {
+          citations.push({
+            id: hit._source.id,
+            createdAt: new Date(hit._source.created_at_epoch).toISOString(),
+            preview: hit._source.summary || hit._source.text.substring(0, 200),
+            score: hit._score,
+            type: hit._source.type,
+            tags: hit._source.tags,
+          });
+        }
       }
     }
     
@@ -401,8 +405,31 @@ export const handler = async (
   
   try {
     // Parse request
-    const body = JSON.parse(event.body || '{}') as AskRequest;
-    const user = event.requestContext.authorizer?.lambda?.user || 'dev';
+    let body: AskRequest;
+    try {
+      body = JSON.parse(event.body || '{}') as AskRequest;
+    } catch (e) {
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'ValidationError',
+          message: 'Invalid JSON in request body',
+        }),
+      };
+    }
+    const user = event.requestContext.authorizer?.lambda?.user;
+    if (!user) {
+      console.error('CRITICAL: User context missing from authorizer');
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'InternalServerError',
+          message: 'Authentication context missing',
+        }),
+      };
+    }
     
     if (!body.query) {
       return {

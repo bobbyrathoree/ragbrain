@@ -37,10 +37,33 @@ export const handler = async (
   
   try {
     // Parse and validate request
-    const body = JSON.parse(event.body || '{}') as CaptureRequest;
+    let body: CaptureRequest;
+    try {
+      body = JSON.parse(event.body || '{}') as CaptureRequest;
+    } catch (e) {
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'ValidationError',
+          message: 'Invalid JSON in request body',
+        }),
+      };
+    }
     
-    // Extract user from authorizer context
-    const user = event.requestContext.authorizer?.lambda?.user || 'dev';
+    // Extract user from authorizer context (must be set by authorizer)
+    const user = event.requestContext.authorizer?.lambda?.user;
+    if (!user) {
+      console.error('CRITICAL: User context missing from authorizer');
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'InternalServerError',
+          message: 'Authentication context missing',
+        }),
+      };
+    }
     
     // Validate input
     if (!body.text || !validateThoughtText(body.text)) {

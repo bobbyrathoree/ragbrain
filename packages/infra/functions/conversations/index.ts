@@ -353,7 +353,12 @@ async function createConversation(
   event: APIGatewayProxyEventV2,
   user: string
 ): Promise<APIGatewayProxyResultV2> {
-  const body = JSON.parse(event.body || '{}') as CreateConversationRequest;
+  let body: CreateConversationRequest;
+  try {
+    body = JSON.parse(event.body || '{}') as CreateConversationRequest;
+  } catch (e) {
+    return errorResponse(400, 'ValidationError', 'Invalid JSON in request body');
+  }
 
   const conversationId = `conv_${uuidv4()}`;
   const now = Date.now();
@@ -777,7 +782,12 @@ async function sendMessage(
     return errorResponse(400, 'ValidationError', 'Conversation ID is required');
   }
 
-  const body = JSON.parse(event.body || '{}') as SendMessageRequest;
+  let body: SendMessageRequest;
+  try {
+    body = JSON.parse(event.body || '{}') as SendMessageRequest;
+  } catch (e) {
+    return errorResponse(400, 'ValidationError', 'Invalid JSON in request body');
+  }
   if (!body.content) {
     return errorResponse(400, 'ValidationError', 'Message content is required');
   }
@@ -842,7 +852,12 @@ async function updateConversation(
     return errorResponse(400, 'ValidationError', 'Conversation ID is required');
   }
 
-  const body = JSON.parse(event.body || '{}') as UpdateConversationRequest;
+  let body: UpdateConversationRequest;
+  try {
+    body = JSON.parse(event.body || '{}') as UpdateConversationRequest;
+  } catch (e) {
+    return errorResponse(400, 'ValidationError', 'Invalid JSON in request body');
+  }
 
   const updateExpressions: string[] = [];
   const expressionAttributeValues: any = {};
@@ -895,6 +910,19 @@ async function deleteConversation(
     return errorResponse(400, 'ValidationError', 'Conversation ID is required');
   }
 
+  // First verify the conversation exists and belongs to user
+  const existingConv = await dynamodb.send(new GetItemCommand({
+    TableName: TABLE_NAME,
+    Key: marshall({
+      pk: `user#${user}`,
+      sk: `conv#${conversationId}`,
+    }),
+  }));
+
+  if (!existingConv.Item) {
+    return errorResponse(404, 'NotFound', 'Conversation not found');
+  }
+
   // Get all messages to delete
   const msgResult = await dynamodb.send(new QueryCommand({
     TableName: TABLE_NAME,
@@ -917,14 +945,22 @@ async function deleteConversation(
     }));
   }
 
-  // Delete conversation record
-  await dynamodb.send(new DeleteItemCommand({
-    TableName: TABLE_NAME,
-    Key: marshall({
-      pk: `user#${user}`,
-      sk: `conv#${conversationId}`,
-    }),
-  }));
+  // Delete conversation record with condition to ensure it still exists
+  try {
+    await dynamodb.send(new DeleteItemCommand({
+      TableName: TABLE_NAME,
+      Key: marshall({
+        pk: `user#${user}`,
+        sk: `conv#${conversationId}`,
+      }),
+      ConditionExpression: 'attribute_exists(pk)',
+    }));
+  } catch (error: any) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      return errorResponse(404, 'NotFound', 'Conversation not found');
+    }
+    throw error;
+  }
 
   return jsonResponse(200, { message: 'Conversation deleted' });
 }
@@ -936,7 +972,11 @@ export const handler = async (
 ): Promise<APIGatewayProxyResultV2> => {
   const method = event.requestContext.http.method;
   const path = event.rawPath || '';
-  const user = event.requestContext.authorizer?.lambda?.user || 'dev';
+  const user = event.requestContext.authorizer?.lambda?.user;
+  if (!user) {
+    console.error('CRITICAL: User context missing from authorizer');
+    return errorResponse(500, 'InternalServerError', 'Authentication context missing');
+  }
 
   console.log(`${method} ${path} - user: ${user}`);
 

@@ -14,7 +14,7 @@ Capture thoughts instantly with global hotkeys. Ask questions and get citation-b
 ## Features
 
 ### Instant Capture
-- **⌥S** — Capture thoughts, code snippets, decisions, and links in under 150ms
+- **⌥S** — Capture thoughts, code snippets, decisions, and links in under 2 seconds
 - Auto-captures context: active app, window title, git repo, branch, file path
 - Works offline with background sync
 
@@ -557,7 +557,7 @@ curl -X POST "$API_URL/conversations" \
 
 ## Design Principles
 
-1. **Speed first** — Capture must never block or feel slow (<150ms)
+1. **Speed first** — Capture must never block or feel slow (target <2s end-to-end)
 2. **Citations required** — Every answer references source notes with timestamps
 3. **Privacy focused** — Your data, your AWS account, encrypted at rest and in conversations
 4. **Offline resilient** — Full local functionality, sync when available

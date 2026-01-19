@@ -68,6 +68,21 @@ export function sanitizeText(text: string): string {
   return sanitized;
 }
 
+/**
+ * Escape HTML entities to prevent XSS attacks.
+ * Use this when rendering user-generated content in HTML contexts.
+ */
+export function escapeHtml(text: string): string {
+  const htmlEntities: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return text.replace(/[&<>"']/g, char => htmlEntities[char]);
+}
+
 export function calculateDecisionScore(text: string): number {
   let score = 0;
   

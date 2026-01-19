@@ -84,12 +84,19 @@ export class ApiStack extends cdk.Stack {
     thoughtsTable.grantReadWriteData(authorizerLambda);
     apiKeySecret.grantRead(authorizerLambda);
 
+    // Define allowed CORS origins based on environment
+    // Note: API Gateway only accepts http/https origins, not custom schemes like tauri:// or capacitor://
+    // Desktop/mobile apps using custom schemes must handle CORS differently or use '*' carefully
+    const allowedOrigins = environment === 'prod'
+      ? ['https://ragbrain.app', 'https://www.ragbrain.app']
+      : ['http://localhost:3000', 'http://localhost:8080'];
+
     // Create HTTP API
     this.api = new apigateway.HttpApi(this, 'HttpApi', {
       apiName: `${projectName}-${environment}`,
       description: `Ragbrain API for ${environment}`,
       corsPreflight: {
-        allowOrigins: ['*'], // Will restrict to app bundle later
+        allowOrigins: allowedOrigins,
         allowMethods: [
           apigateway.CorsHttpMethod.GET,
           apigateway.CorsHttpMethod.POST,
@@ -257,10 +264,78 @@ export class ApiStack extends cdk.Stack {
       authorizer,
     });
 
-    // WAF Web ACL for additional protection (only in prod)
-    // Note: API Gateway HTTP API requires manual ARN construction for WAF association
-    // TODO: Enable WAF for prod deployment
-    // Rate limiting is handled by API Gateway throttling for now
+    // WAF Web ACL for additional protection (production only)
+    if (environment === 'prod') {
+      const webAcl = new waf.CfnWebACL(this, 'ApiWafAcl', {
+        name: `${projectName}-api-waf-${environment}`,
+        scope: 'REGIONAL',
+        defaultAction: { allow: {} },
+        visibilityConfig: {
+          cloudWatchMetricsEnabled: true,
+          metricName: `${projectName}-api-waf`,
+          sampledRequestsEnabled: true,
+        },
+        rules: [
+          // AWS Managed Rules - Common Rule Set
+          {
+            name: 'AWSManagedRulesCommonRuleSet',
+            priority: 1,
+            overrideAction: { none: {} },
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesCommonRuleSet',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'CommonRuleSet',
+              sampledRequestsEnabled: true,
+            },
+          },
+          // AWS Managed Rules - Known Bad Inputs
+          {
+            name: 'AWSManagedRulesKnownBadInputsRuleSet',
+            priority: 2,
+            overrideAction: { none: {} },
+            statement: {
+              managedRuleGroupStatement: {
+                vendorName: 'AWS',
+                name: 'AWSManagedRulesKnownBadInputsRuleSet',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'KnownBadInputs',
+              sampledRequestsEnabled: true,
+            },
+          },
+          // Rate limiting rule - 2000 requests per 5 minutes per IP
+          {
+            name: 'RateLimitRule',
+            priority: 3,
+            action: { block: {} },
+            statement: {
+              rateBasedStatement: {
+                limit: 2000,
+                aggregateKeyType: 'IP',
+              },
+            },
+            visibilityConfig: {
+              cloudWatchMetricsEnabled: true,
+              metricName: 'RateLimit',
+              sampledRequestsEnabled: true,
+            },
+          },
+        ],
+      });
+
+      // Output WAF ARN for reference
+      new cdk.CfnOutput(this, 'WafAclArn', {
+        value: webAcl.attrArn,
+        description: 'WAF Web ACL ARN',
+      });
+    }
 
     this.apiUrl = stage.url;
 

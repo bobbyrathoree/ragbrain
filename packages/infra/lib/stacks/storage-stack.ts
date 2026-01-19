@@ -76,7 +76,9 @@ export class StorageStack extends cdk.Stack {
       cors: [
         {
           allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.PUT, s3.HttpMethods.POST],
-          allowedOrigins: ['*'], // Will restrict to app bundle ID later
+          allowedOrigins: environment === 'prod'
+            ? ['https://ragbrain.app', 'https://www.ragbrain.app']
+            : ['http://localhost:3000', 'http://localhost:8080'],
           allowedHeaders: ['*'],
           maxAge: 3600,
         },

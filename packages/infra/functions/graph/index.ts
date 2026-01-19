@@ -358,8 +358,19 @@ export const handler = async (
         : 0.7,
     };
     
-    const user = event.requestContext.authorizer?.lambda?.user || 'dev';
-    
+    const user = event.requestContext.authorizer?.lambda?.user;
+    if (!user) {
+      console.error('CRITICAL: User context missing from authorizer');
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'InternalServerError',
+          message: 'Authentication context missing',
+        }),
+      };
+    }
+
     // Check if we have a cached version
     const cacheKey = `graph/${user}/${params.month || 'all'}.json`;
 

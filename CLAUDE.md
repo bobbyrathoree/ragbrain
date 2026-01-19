@@ -6,7 +6,7 @@ Ragbrain is a blazing-fast, local-first note capture and retrieval system for ma
 ## Core Features
 - **⌥S** - Instant capture of thoughts, code snippets, decisions, and links
 - **⌥F** - Ask questions and get answers with timestamped citations from your notes
-- **Local-first** - Sub-150ms capture with offline support and background sync
+- **Local-first** - Fast capture (sub-2s end-to-end) with offline support and background sync
 - **Intelligent retrieval** - Hybrid search combining keyword matching and semantic embeddings
 - **Beautiful visualizations** - Timeline heatmap and topic graph for exploring your knowledge
 
@@ -19,7 +19,7 @@ Ragbrain is a blazing-fast, local-first note capture and retrieval system for ma
 ## Key Design Principles
 1. **Speed first** - Capture must never block or feel slow
 2. **Citations required** - Every answer must reference source notes with timestamps
-3. **Privacy focused** - All data encrypted, no secrets in logs, PII scrubbing
+3. **Privacy focused** - All data encrypted, no secrets in logs, API key redaction
 4. **Offline resilient** - Full functionality locally, sync when available
 
 ## Implementation Status
@@ -33,7 +33,7 @@ Currently in development following a phased approach:
 
 ## Development Guidelines
 - Follow existing code patterns and conventions
-- Maintain sub-150ms capture performance
+- Maintain responsive capture performance (target <2s end-to-end)
 - Ensure all AWS resources use KMS encryption
 - Never log note contents or sensitive data
 - Test offline scenarios thoroughly
