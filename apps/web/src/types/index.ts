@@ -28,32 +28,39 @@ export interface Citation {
 export interface GraphNode {
   id: string
   label: string
-  cluster: string
+  themeId: string
   x: number
   y: number
-  z: number
+  tags: string[]
+  recency: number
   importance: number
-  tags?: string[]
-  recency?: number
-  type?: string
+  type: string
 }
 
 export interface GraphEdge {
   source: string
   target: string
-  similarity: number  // Renamed from weight to match backend
+  similarity: number
 }
 
-export interface GraphCluster {
+export interface GraphTheme {
   id: string
   label: string
+  description: string
   color: string
   count: number
-  nodeIds?: string[]
+  sampleThoughts: { id: string; text: string }[]
 }
 
 export interface GraphData {
+  themes: GraphTheme[]
   nodes: GraphNode[]
   edges: GraphEdge[]
-  clusters: GraphCluster[]
+  metadata?: {
+    totalNodes: number
+    totalEdges: number
+    totalThemes: number
+    generatedAt: string
+    algorithm: string
+  }
 }

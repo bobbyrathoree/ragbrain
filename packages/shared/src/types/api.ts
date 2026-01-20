@@ -80,14 +80,14 @@ export interface ThoughtsResponse {
 
 export interface GraphNode {
   id: string;
+  label: string;      // Thought preview text (truncated)
+  themeId: string;    // Links to theme
   x: number;
   y: number;
-  z?: number;
   tags: string[];
   recency: number;
   importance: number;
   type: string;
-  clusterId?: string;
 }
 
 export interface GraphEdge {
@@ -96,18 +96,23 @@ export interface GraphEdge {
   similarity: number;
 }
 
+export interface GraphTheme {
+  id: string;
+  label: string;           // LLM-generated: "API Development & Testing"
+  description: string;     // LLM-generated: "Thoughts about building REST APIs..."
+  color: string;
+  count: number;
+  sampleThoughts: { id: string; text: string }[];
+}
+
 export interface GraphResponse {
+  themes: GraphTheme[];    // 5-8 LLM-labeled themes
   nodes: GraphNode[];
   edges: GraphEdge[];
-  clusters?: {
-    id: string;
-    label: string;
-    color: string;
-    nodeIds: string[];
-  }[];
   metadata?: {
     totalNodes: number;
     totalEdges: number;
+    totalThemes: number;
     generatedAt: string;
     algorithm: string;
   };

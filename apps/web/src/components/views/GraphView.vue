@@ -1,269 +1,276 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import * as d3 from 'd3'
 import { graphApi } from '@/api'
+import type { GraphNode, GraphEdge, GraphTheme } from '@/types'
 
-const containerRef = ref<HTMLDivElement | null>(null)
-const selectedNode = ref<{ id: string; label: string; cluster: string } | null>(null)
-const hoveredNode = ref<{ id: string; label: string; x: number; y: number } | null>(null)
-const sidebarOpen = ref(false)
+const graphContainer = ref<HTMLDivElement | null>(null)
+const svgRef = ref<SVGSVGElement | null>(null)
+const selectedNode = ref<GraphNode | null>(null)
+const hoveredNode = ref<{ node: GraphNode; x: number; y: number } | null>(null)
+const expandedTheme = ref<string | null>(null)
 const isLoading = ref(true)
 const loadError = ref<string | null>(null)
 
-// Default cluster colors (used as fallback)
-const defaultClusterColors = [
-  0xff6b6b, 0x4ecdc4, 0x45b7d1, 0x96ceb4, 0xfeca57, 0xdda0dd
-]
-const otherClusterColor = 0x6b7280
+// Graph data from API
+const themes = ref<GraphTheme[]>([])
+const nodes = ref<GraphNode[]>([])
+const edges = ref<GraphEdge[]>([])
 
-// Dynamic clusters from API
-const clusters = ref<{ id: string; name: string; color: string; count: number }[]>([])
-const clusterColorMap = ref<Record<string, number>>({})
+// D3 simulation
+let simulation: d3.Simulation<GraphNode, GraphEdge> | null = null
+let svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null
+let nodeElements: d3.Selection<SVGCircleElement, GraphNode, SVGGElement, unknown> | null = null
+let edgeElements: d3.Selection<SVGLineElement, GraphEdge, SVGGElement, unknown> | null = null
+let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null
 
-interface GraphNode {
-  id: string
-  label: string
-  cluster: string
-  position: THREE.Vector3
-  mesh?: THREE.Mesh
-}
-
-interface GraphEdge {
-  source: string
-  target: string
-  similarity: number
-}
-
-let scene: THREE.Scene
-let camera: THREE.PerspectiveCamera
-let renderer: THREE.WebGLRenderer
-let controls: OrbitControls
-let raycaster: THREE.Raycaster
-let mouse: THREE.Vector2
-let animationId: number
-let nodes: GraphNode[] = []
-let nodeMeshes: THREE.Mesh[] = []
-let edgeLines: THREE.LineSegments
-
-// Generate mock graph data
-const generateGraphData = () => {
-  // Set up mock clusters
-  const mockClusterDefs = [
-    { id: 'cluster-0', name: 'Technology', color: '#FF6B6B' },
-    { id: 'cluster-1', name: 'Work', color: '#4ECDC4' },
-    { id: 'cluster-2', name: 'Personal', color: '#45B7D1' },
-    { id: 'cluster-3', name: 'Learning', color: '#96CEB4' },
-  ]
-
-  // Set up cluster color map for rendering
-  clusterColorMap.value = {}
-  mockClusterDefs.forEach((c) => {
-    clusterColorMap.value[c.id] = parseInt(c.color.slice(1), 16)
+// Create color scale from themes
+const colorScale = computed(() => {
+  const scale = new Map<string, string>()
+  themes.value.forEach(theme => {
+    scale.set(theme.id, theme.color)
   })
+  return scale
+})
 
-  const clusterIds = mockClusterDefs.map(c => c.id)
-  nodes = []
+function getNodeColor(node: GraphNode): string {
+  return colorScale.value.get(node.themeId) || '#6b7280'
+}
 
-  for (let i = 0; i < 40; i++) {
-    const cluster = clusterIds[Math.floor(Math.random() * clusterIds.length)]
-    const theta = Math.random() * Math.PI * 2
-    const phi = Math.acos(2 * Math.random() - 1)
-    const radius = 3 + Math.random() * 2
+function initForceGraph() {
+  if (!svgRef.value || !graphContainer.value) return
 
-    nodes.push({
-      id: `node-${i}`,
-      label: `Sample thought ${i + 1}: This is demo content`,
-      cluster,
-      position: new THREE.Vector3(
-        radius * Math.sin(phi) * Math.cos(theta),
-        radius * Math.sin(phi) * Math.sin(theta),
-        radius * Math.cos(phi)
-      ),
+  const width = graphContainer.value.clientWidth
+  const height = graphContainer.value.clientHeight
+
+  // Clear previous content
+  d3.select(svgRef.value).selectAll('*').remove()
+
+  svg = d3.select(svgRef.value)
+    .attr('width', width)
+    .attr('height', height)
+
+  // Create container group for zoom/pan
+  const g = svg.append('g')
+
+  // Set up zoom behavior
+  zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
+    .scaleExtent([0.1, 4])
+    .on('zoom', (event) => {
+      g.attr('transform', event.transform)
     })
-  }
 
-  // Update clusters ref with counts
-  clusters.value = mockClusterDefs.map((c) => ({
-    id: c.id,
-    name: c.name,
-    color: c.color,
-    count: nodes.filter((n) => n.cluster === c.id).length,
-  }))
+  svg.call(zoomBehavior)
 
-  // Generate edges between nearby nodes
-  const edges: GraphEdge[] = []
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const dist = nodes[i].position.distanceTo(nodes[j].position)
-      if (dist < 3) {
-        edges.push({
-          source: nodes[i].id,
-          target: nodes[j].id,
-          similarity: 1 - dist / 3,
-        })
+  // Initial zoom to fit content
+  const initialScale = 0.8
+  const initialX = width / 2
+  const initialY = height / 2
+  svg.call(
+    zoomBehavior.transform,
+    d3.zoomIdentity.translate(initialX, initialY).scale(initialScale)
+  )
+
+  // Create edge elements
+  edgeElements = g.append('g')
+    .attr('class', 'edges')
+    .selectAll('line')
+    .data(edges.value)
+    .join('line')
+    .attr('stroke', 'currentColor')
+    .attr('stroke-opacity', 0.2)
+    .attr('stroke-width', 1)
+    .attr('class', 'text-gray-400 dark:text-gray-600')
+
+  // Create node elements
+  nodeElements = g.append('g')
+    .attr('class', 'nodes')
+    .selectAll('circle')
+    .data(nodes.value)
+    .join('circle')
+    .attr('r', d => 4 + d.importance * 6)
+    .attr('fill', d => getNodeColor(d))
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 1.5)
+    .attr('cursor', 'pointer')
+    .on('mouseenter', (event, d) => {
+      const rect = graphContainer.value?.getBoundingClientRect()
+      if (rect) {
+        hoveredNode.value = {
+          node: d,
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top
+        }
+      }
+    })
+    .on('mouseleave', () => {
+      hoveredNode.value = null
+    })
+    .on('click', (_, d) => {
+      selectedNode.value = d
+      expandedTheme.value = d.themeId
+    })
+
+  // Add drag behavior
+  nodeElements.call(
+    d3.drag<SVGCircleElement, GraphNode>()
+      .on('start', dragStarted)
+      .on('drag', dragged)
+      .on('end', dragEnded)
+  )
+
+  // Create force simulation
+  simulation = d3.forceSimulation<GraphNode>(nodes.value)
+    .force('link', d3.forceLink<GraphNode, GraphEdge>(edges.value)
+      .id(d => d.id)
+      .distance(60)
+      .strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-80))
+    .force('center', d3.forceCenter(0, 0))
+    .force('collision', d3.forceCollide().radius(d => 8 + (d as GraphNode).importance * 6))
+    .force('cluster', forceCluster())
+    .on('tick', ticked)
+}
+
+// Custom force to cluster nodes by theme
+function forceCluster() {
+  const strength = 0.15
+
+  function force(alpha: number) {
+    // Calculate theme centroids
+    const themeCentroids = new Map<string, { x: number; y: number; count: number }>()
+
+    for (const node of nodes.value) {
+      const centroid = themeCentroids.get(node.themeId) || { x: 0, y: 0, count: 0 }
+      centroid.x += node.x
+      centroid.y += node.y
+      centroid.count++
+      themeCentroids.set(node.themeId, centroid)
+    }
+
+    // Normalize centroids
+    for (const [, centroid] of themeCentroids) {
+      centroid.x /= centroid.count
+      centroid.y /= centroid.count
+    }
+
+    // Apply force toward theme centroid
+    for (const node of nodes.value) {
+      const centroid = themeCentroids.get(node.themeId)
+      if (centroid) {
+        node.vx = (node.vx || 0) + (centroid.x - node.x) * strength * alpha
+        node.vy = (node.vy || 0) + (centroid.y - node.y) * strength * alpha
       }
     }
   }
 
-  return { nodes, edges }
+  return force
 }
 
-// Setup scene basics (shared between initScene and initSceneWithData)
-const setupScene = () => {
-  if (!containerRef.value) return false
+function ticked() {
+  if (edgeElements) {
+    edgeElements
+      .attr('x1', d => (d.source as unknown as GraphNode).x)
+      .attr('y1', d => (d.source as unknown as GraphNode).y)
+      .attr('x2', d => (d.target as unknown as GraphNode).x)
+      .attr('y2', d => (d.target as unknown as GraphNode).y)
+  }
 
-  const width = containerRef.value.clientWidth
-  const height = containerRef.value.clientHeight
-  const isDark = document.documentElement.classList.contains('dark')
-
-  // Scene
-  scene = new THREE.Scene()
-  scene.background = new THREE.Color(isDark ? 0x0a0a0a : 0xfafafa)
-
-  // Camera
-  camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 100)
-  camera.position.set(0, 0, 10)
-
-  // Renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setSize(width, height)
-  renderer.setPixelRatio(window.devicePixelRatio)
-  containerRef.value.appendChild(renderer.domElement)
-
-  // Controls
-  controls = new OrbitControls(camera, renderer.domElement)
-  controls.enableDamping = true
-  controls.dampingFactor = 0.05
-  controls.minDistance = 5
-  controls.maxDistance = 20
-
-  // Lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
-  scene.add(ambientLight)
-  const pointLight = new THREE.PointLight(0xffffff, 0.8)
-  pointLight.position.set(10, 10, 10)
-  scene.add(pointLight)
-
-  // Raycaster for hover/click
-  raycaster = new THREE.Raycaster()
-  mouse = new THREE.Vector2()
-
-  return true
-}
-
-// Render nodes and edges to the scene
-const renderGraph = (graphNodes: GraphNode[], edges: GraphEdge[]) => {
-  const isDark = document.documentElement.classList.contains('dark')
-
-  // Create node meshes
-  const nodeGeometry = new THREE.SphereGeometry(0.15, 16, 16)
-  graphNodes.forEach((node) => {
-    const material = new THREE.MeshStandardMaterial({
-      color: clusterColorMap.value[node.cluster] || otherClusterColor,
-      roughness: 0.4,
-      metalness: 0.3,
-    })
-    const mesh = new THREE.Mesh(nodeGeometry, material)
-    mesh.position.copy(node.position)
-    mesh.userData = { id: node.id, label: node.label, cluster: node.cluster }
-    scene.add(mesh)
-    nodeMeshes.push(mesh)
-    node.mesh = mesh
-  })
-
-  // Create edges
-  const edgeGeometry = new THREE.BufferGeometry()
-  const positions: number[] = []
-  edges.forEach((edge) => {
-    const sourceNode = graphNodes.find((n) => n.id === edge.source)
-    const targetNode = graphNodes.find((n) => n.id === edge.target)
-    if (sourceNode && targetNode) {
-      positions.push(
-        sourceNode.position.x, sourceNode.position.y, sourceNode.position.z,
-        targetNode.position.x, targetNode.position.y, targetNode.position.z
-      )
-    }
-  })
-  edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  const edgeMaterial = new THREE.LineBasicMaterial({
-    color: isDark ? 0x333333 : 0xcccccc,
-    transparent: true,
-    opacity: 0.3,
-  })
-  edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial)
-  scene.add(edgeLines)
-}
-
-// Initialize scene with API data
-const initSceneWithData = (graphNodes: GraphNode[], edges: GraphEdge[]) => {
-  if (!setupScene()) return
-  renderGraph(graphNodes, edges)
-}
-
-// Initialize scene with generated mock data
-const initScene = () => {
-  if (!setupScene()) return
-  const { nodes: graphNodes, edges } = generateGraphData()
-  renderGraph(graphNodes, edges)
-}
-
-const onMouseMove = (event: MouseEvent) => {
-  if (!containerRef.value) return
-
-  const rect = containerRef.value.getBoundingClientRect()
-  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-
-  raycaster.setFromCamera(mouse, camera)
-  const intersects = raycaster.intersectObjects(nodeMeshes)
-
-  if (intersects.length > 0) {
-    const obj = intersects[0].object
-    hoveredNode.value = {
-      id: obj.userData.id,
-      label: obj.userData.label,
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    }
-    containerRef.value.style.cursor = 'pointer'
-  } else {
-    hoveredNode.value = null
-    containerRef.value.style.cursor = 'grab'
+  if (nodeElements) {
+    nodeElements
+      .attr('cx', d => d.x)
+      .attr('cy', d => d.y)
   }
 }
 
-const onClick = () => {
-  if (hoveredNode.value) {
-    const node = nodes.find((n) => n.id === hoveredNode.value?.id)
-    if (node) {
-      selectedNode.value = { id: node.id, label: node.label, cluster: node.cluster }
-    }
-  }
+function dragStarted(event: d3.D3DragEvent<SVGCircleElement, GraphNode, GraphNode>) {
+  if (!event.active) simulation?.alphaTarget(0.3).restart()
+  event.subject.fx = event.subject.x
+  event.subject.fy = event.subject.y
 }
 
-const animate = () => {
-  animationId = requestAnimationFrame(animate)
-  controls.update()
-  renderer.render(scene, camera)
+function dragged(event: d3.D3DragEvent<SVGCircleElement, GraphNode, GraphNode>) {
+  event.subject.fx = event.x
+  event.subject.fy = event.y
 }
 
-const onResize = () => {
-  if (!containerRef.value) return
-  const width = containerRef.value.clientWidth
-  const height = containerRef.value.clientHeight
-  camera.aspect = width / height
-  camera.updateProjectionMatrix()
-  renderer.setSize(width, height)
+function dragEnded(event: d3.D3DragEvent<SVGCircleElement, GraphNode, GraphNode>) {
+  if (!event.active) simulation?.alphaTarget(0)
+  event.subject.fx = null
+  event.subject.fy = null
 }
 
-// Watch for theme changes
-watch(() => document.documentElement.classList.contains('dark'), (isDark) => {
-  if (scene) {
-    scene.background = new THREE.Color(isDark ? 0x0a0a0a : 0xfafafa)
-    if (edgeLines) {
-      (edgeLines.material as THREE.LineBasicMaterial).color.set(isDark ? 0x333333 : 0xcccccc)
-    }
+function toggleTheme(themeId: string) {
+  expandedTheme.value = expandedTheme.value === themeId ? null : themeId
+}
+
+function focusOnTheme(themeId: string) {
+  if (!svg || !zoomBehavior || !graphContainer.value) return
+
+  // Find nodes in this theme
+  const themeNodes = nodes.value.filter(n => n.themeId === themeId)
+  if (themeNodes.length === 0) return
+
+  // Calculate bounding box
+  const xs = themeNodes.map(n => n.x)
+  const ys = themeNodes.map(n => n.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+
+  const width = graphContainer.value.clientWidth
+  const height = graphContainer.value.clientHeight
+
+  // Calculate zoom to fit theme
+  const padding = 100
+  const boxWidth = maxX - minX + padding * 2
+  const boxHeight = maxY - minY + padding * 2
+  const scale = Math.min(width / boxWidth, height / boxHeight, 2)
+
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+
+  svg.transition()
+    .duration(750)
+    .call(
+      zoomBehavior.transform,
+      d3.zoomIdentity
+        .translate(width / 2, height / 2)
+        .scale(scale)
+        .translate(-centerX, -centerY)
+    )
+}
+
+function resetView() {
+  if (!svg || !zoomBehavior || !graphContainer.value) return
+
+  const width = graphContainer.value.clientWidth
+  const height = graphContainer.value.clientHeight
+
+  svg.transition()
+    .duration(750)
+    .call(
+      zoomBehavior.transform,
+      d3.zoomIdentity.translate(width / 2, height / 2).scale(0.8)
+    )
+}
+
+function handleResize() {
+  if (!svgRef.value || !graphContainer.value) return
+
+  const width = graphContainer.value.clientWidth
+  const height = graphContainer.value.clientHeight
+
+  d3.select(svgRef.value)
+    .attr('width', width)
+    .attr('height', height)
+}
+
+// Watch for theme changes to update colors
+watch(() => document.documentElement.classList.contains('dark'), () => {
+  if (nodeElements) {
+    nodeElements.attr('fill', d => getNodeColor(d))
   }
 })
 
@@ -272,120 +279,262 @@ onMounted(async () => {
   loadError.value = null
 
   try {
-    // Try to fetch real graph data from API
     const apiData = await graphApi.get()
-    if (apiData.nodes && apiData.nodes.length > 0) {
-      // Set up clusters from API response
-      if (apiData.clusters && apiData.clusters.length > 0) {
-        // Build cluster color map for rendering
-        clusterColorMap.value = {}
-        apiData.clusters.forEach((c, index) => {
-          clusterColorMap.value[c.id] = parseInt(c.color.slice(1), 16) || defaultClusterColors[index % defaultClusterColors.length]
-        })
 
-        // Update clusters ref for sidebar display
-        clusters.value = apiData.clusters.map((c) => ({
-          id: c.id,
-          name: c.label,
-          color: c.color,
-          count: c.count,
-        }))
-      }
+    if (apiData.themes && apiData.themes.length > 0) {
+      themes.value = apiData.themes
+      nodes.value = apiData.nodes || []
+      edges.value = apiData.edges || []
 
-      // Transform API nodes to our format
-      nodes = apiData.nodes.map((n) => ({
-        id: n.id,
-        label: n.label,  // Real label from backend
-        cluster: n.cluster,  // Real cluster from backend
-        position: new THREE.Vector3(n.x || 0, n.y || 0, n.z || 0),
-      }))
+      // Initialize positions from API data
+      nodes.value.forEach(node => {
+        node.x = node.x || 0
+        node.y = node.y || 0
+      })
 
-      initSceneWithData(nodes, apiData.edges || [])
+      initForceGraph()
     } else {
-      // No data from API, use generated mock
-      initScene()
+      // Generate mock data for demo
+      generateMockData()
+      initForceGraph()
     }
   } catch (e) {
-    console.warn('Failed to load graph from API, using generated data:', e)
+    console.warn('Failed to load graph from API, using demo data:', e)
     loadError.value = 'Using demo data'
-    initScene()
+    generateMockData()
+    initForceGraph()
   } finally {
     isLoading.value = false
   }
 
-  animate()
-  window.addEventListener('resize', onResize)
-  containerRef.value?.addEventListener('mousemove', onMouseMove)
-  containerRef.value?.addEventListener('click', onClick)
+  window.addEventListener('resize', handleResize)
 })
 
+function generateMockData() {
+  // Generate mock themes
+  themes.value = [
+    { id: 'theme-0', label: 'Development & Code', description: 'Software development and coding tasks', color: '#FF6B6B', count: 12, sampleThoughts: [] },
+    { id: 'theme-1', label: 'Project Planning', description: 'Planning and project management', color: '#4ECDC4', count: 8, sampleThoughts: [] },
+    { id: 'theme-2', label: 'Learning & Research', description: 'Learning new technologies and research', color: '#45B7D1', count: 10, sampleThoughts: [] },
+    { id: 'theme-3', label: 'Personal Notes', description: 'Personal thoughts and reminders', color: '#96CEB4', count: 10, sampleThoughts: [] },
+  ]
+
+  // Generate mock nodes
+  nodes.value = []
+  const labels = [
+    'Implement user authentication with JWT tokens',
+    'Fix the memory leak in the data processing pipeline',
+    'Review pull request for new feature',
+    'Set up CI/CD pipeline for automated testing',
+    'Research best practices for API design',
+    'Plan sprint goals for next week',
+    'Document the new REST endpoints',
+    'Optimize database queries for better performance',
+    'Learn about WebSocket implementation',
+    'Debug the production issue with caching',
+  ]
+
+  for (let i = 0; i < 40; i++) {
+    const themeId = `theme-${i % 4}`
+    nodes.value.push({
+      id: `node-${i}`,
+      label: labels[i % labels.length],
+      themeId,
+      x: (Math.random() - 0.5) * 300,
+      y: (Math.random() - 0.5) * 300,
+      tags: ['demo'],
+      recency: Math.random(),
+      importance: Math.random(),
+      type: 'thought',
+    })
+  }
+
+  // Update theme sample thoughts
+  themes.value.forEach(theme => {
+    theme.sampleThoughts = nodes.value
+      .filter(n => n.themeId === theme.id)
+      .slice(0, 3)
+      .map(n => ({ id: n.id, text: n.label }))
+  })
+
+  // Generate mock edges
+  edges.value = []
+  for (let i = 0; i < nodes.value.length; i++) {
+    // Connect to 1-3 random nodes
+    const numConnections = Math.floor(Math.random() * 3) + 1
+    for (let j = 0; j < numConnections; j++) {
+      const targetIdx = Math.floor(Math.random() * nodes.value.length)
+      if (targetIdx !== i) {
+        edges.value.push({
+          source: nodes.value[i].id,
+          target: nodes.value[targetIdx].id,
+          similarity: 0.7 + Math.random() * 0.3,
+        })
+      }
+    }
+  }
+}
+
 onUnmounted(() => {
-  cancelAnimationFrame(animationId)
-  window.removeEventListener('resize', onResize)
-  containerRef.value?.removeEventListener('mousemove', onMouseMove)
-  containerRef.value?.removeEventListener('click', onClick)
-  renderer?.dispose()
+  window.removeEventListener('resize', handleResize)
+  simulation?.stop()
 })
 </script>
 
 <template>
   <div class="h-[calc(100vh-5rem)] flex relative">
-    <!-- 3D Canvas -->
-    <div ref="containerRef" class="flex-1 relative">
-      <!-- Hover tooltip -->
-      <div
-        v-if="hoveredNode"
-        class="absolute pointer-events-none bg-bg-elevated/95 backdrop-blur-sm border border-border-secondary rounded-lg px-3 py-2 text-sm shadow-lg z-10"
-        :style="{ left: hoveredNode.x + 12 + 'px', top: hoveredNode.y - 12 + 'px' }"
-      >
-        {{ hoveredNode.label }}
+    <!-- Theme Sidebar -->
+    <aside class="w-72 border-r border-border-secondary overflow-auto bg-bg-elevated flex-shrink-0">
+      <div class="p-4 border-b border-border-secondary">
+        <h2 class="text-sm font-semibold text-text-primary">Knowledge Themes</h2>
+        <p class="text-xs text-text-tertiary mt-1">{{ themes.length }} themes from {{ nodes.length }} thoughts</p>
       </div>
-    </div>
 
-    <!-- Mobile sidebar toggle -->
-    <button
-      @click="sidebarOpen = !sidebarOpen"
-      class="lg:hidden fixed top-20 right-4 z-30 w-10 h-10 bg-bg-elevated border border-border-secondary rounded-lg flex items-center justify-center text-text-secondary"
-    >
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16" />
-      </svg>
-    </button>
-
-    <!-- Legend Panel -->
-    <div
-      :class="[
-        'w-56 bg-bg-elevated border-l border-border-secondary p-4 overflow-auto transition-transform duration-200',
-        'fixed lg:relative right-0 top-0 h-full z-20',
-        sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
-      ]"
-    >
-      <h3 class="text-sm font-medium text-text-primary mb-4">Clusters</h3>
-
-      <div class="space-y-2">
-        <button
-          v-for="cluster in clusters"
-          :key="cluster.id"
-          class="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-bg-tertiary transition-colors text-left"
+      <div class="divide-y divide-border-secondary">
+        <div
+          v-for="theme in themes"
+          :key="theme.id"
+          class="group"
         >
-          <div class="w-2.5 h-2.5 rounded-full" :style="{ backgroundColor: cluster.color }" />
-          <span class="flex-1 text-sm text-text-primary">{{ cluster.name }}</span>
-          <span class="text-xs text-text-tertiary">{{ cluster.count }}</span>
-        </button>
-      </div>
+          <!-- Theme Header -->
+          <button
+            @click="toggleTheme(theme.id)"
+            class="w-full p-4 text-left hover:bg-bg-tertiary transition-colors"
+          >
+            <div class="flex items-center gap-3">
+              <div
+                class="w-3 h-3 rounded-full flex-shrink-0"
+                :style="{ backgroundColor: theme.color }"
+              />
+              <div class="flex-1 min-w-0">
+                <h3 class="font-medium text-sm text-text-primary truncate">{{ theme.label }}</h3>
+                <p class="text-xs text-text-tertiary mt-0.5 line-clamp-2">{{ theme.description }}</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-text-secondary bg-bg-tertiary px-2 py-0.5 rounded-full">
+                  {{ theme.count }}
+                </span>
+                <svg
+                  class="w-4 h-4 text-text-tertiary transition-transform"
+                  :class="{ 'rotate-180': expandedTheme === theme.id }"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
+          </button>
 
-      <!-- Selected node -->
-      <div v-if="selectedNode" class="mt-6 pt-4 border-t border-border-secondary">
-        <h4 class="text-xs text-text-tertiary uppercase tracking-wider mb-2">Selected</h4>
-        <div class="p-3 bg-bg-tertiary rounded-lg">
-          <p class="text-sm text-text-primary font-medium">{{ selectedNode.label }}</p>
-          <p class="text-xs text-text-tertiary mt-1 capitalize">{{ selectedNode.cluster }}</p>
+          <!-- Expanded Sample Thoughts -->
+          <div
+            v-if="expandedTheme === theme.id"
+            class="bg-bg-tertiary/50 border-t border-border-secondary"
+          >
+            <div class="p-3 space-y-2">
+              <div
+                v-for="thought in theme.sampleThoughts"
+                :key="thought.id"
+                class="text-xs p-2 bg-bg-elevated rounded-lg text-text-secondary hover:text-text-primary cursor-pointer transition-colors"
+                @click="selectedNode = nodes.find(n => n.id === thought.id) || null"
+              >
+                {{ thought.text }}
+              </div>
+              <button
+                @click="focusOnTheme(theme.id)"
+                class="w-full text-xs text-accent-primary hover:text-accent-primary/80 py-1.5 flex items-center justify-center gap-1"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
+                </svg>
+                Focus on this theme
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Controls hint -->
-      <div class="mt-6 pt-4 border-t border-border-secondary text-xs text-text-tertiary space-y-1">
-        <p>Drag to rotate</p>
+      <!-- Selected Node Details -->
+      <div v-if="selectedNode" class="p-4 border-t border-border-secondary bg-bg-tertiary/30">
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">Selected</h4>
+          <button
+            @click="selectedNode = null"
+            class="text-text-tertiary hover:text-text-primary"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div class="p-3 bg-bg-elevated rounded-lg">
+          <p class="text-sm text-text-primary leading-relaxed">{{ selectedNode.label }}</p>
+          <div class="flex items-center gap-2 mt-2">
+            <span
+              class="text-xs px-2 py-0.5 rounded-full"
+              :style="{ backgroundColor: getNodeColor(selectedNode) + '20', color: getNodeColor(selectedNode) }"
+            >
+              {{ themes.find(t => t.id === selectedNode?.themeId)?.label || 'Unknown' }}
+            </span>
+            <span class="text-xs text-text-tertiary capitalize">{{ selectedNode.type }}</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 2D Force Graph -->
+    <div ref="graphContainer" class="flex-1 relative bg-bg-primary">
+      <!-- Loading State -->
+      <div v-if="isLoading" class="absolute inset-0 flex items-center justify-center bg-bg-primary/80">
+        <div class="flex items-center gap-3 text-text-secondary">
+          <svg class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span>Loading knowledge graph...</span>
+        </div>
+      </div>
+
+      <!-- Error Banner -->
+      <div
+        v-if="loadError"
+        class="absolute top-4 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs rounded-full"
+      >
+        {{ loadError }}
+      </div>
+
+      <!-- SVG Canvas -->
+      <svg ref="svgRef" class="w-full h-full"></svg>
+
+      <!-- Hover Tooltip -->
+      <div
+        v-if="hoveredNode"
+        class="absolute pointer-events-none bg-bg-elevated/95 backdrop-blur-sm border border-border-secondary rounded-lg px-3 py-2 text-sm shadow-lg z-20 max-w-xs"
+        :style="{ left: hoveredNode.x + 16 + 'px', top: hoveredNode.y - 8 + 'px' }"
+      >
+        <p class="text-text-primary font-medium">{{ hoveredNode.node.label }}</p>
+        <p class="text-xs text-text-tertiary mt-1">
+          {{ themes.find(t => t.id === hoveredNode?.node.themeId)?.label || 'Unknown theme' }}
+        </p>
+      </div>
+
+      <!-- Controls -->
+      <div class="absolute bottom-4 right-4 flex flex-col gap-2">
+        <button
+          @click="resetView"
+          class="w-10 h-10 bg-bg-elevated border border-border-secondary rounded-lg flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition-colors shadow-sm"
+          title="Reset view"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Legend -->
+      <div class="absolute bottom-4 left-4 text-xs text-text-tertiary space-y-1 bg-bg-elevated/80 backdrop-blur-sm rounded-lg p-3 border border-border-secondary">
+        <p>Drag nodes to rearrange</p>
         <p>Scroll to zoom</p>
         <p>Click node to select</p>
       </div>
