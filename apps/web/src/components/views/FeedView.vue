@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useThoughts } from '@/composables/useThoughts'
 import type { Thought, ThoughtType } from '@/types'
 
 const MAX_LENGTH = 280
 
-const { thoughts, isLoading, fetchThoughts } = useThoughts()
+const {
+  thoughts,
+  isLoading,
+  isLoadingMore,
+  hasMore,
+  fetchThoughts,
+  fetchMoreThoughts
+} = useThoughts()
 
 // Filtering
 const filterType = ref<ThoughtType | 'all'>('all')
@@ -21,25 +28,15 @@ const typeAccent: Record<string, string> = {
   link: 'before:bg-rose-400',
 }
 
-// Mock data fallback
-const mockThoughts: Thought[] = [
-  { id: '1', content: 'OAuth vs JWT for the new auth system. Team prefers JWT — stateless, easier to scale.', type: 'decision', tags: ['auth'], createdAt: new Date().toISOString() },
-  { id: '2', content: 'Users experiencing 3-4s load times. Performance optimization is now priority #1 before launch.', type: 'insight', tags: ['perf'], createdAt: new Date(Date.now() - 3600000).toISOString() },
-  { id: '3', content: 'const fetchUser = async (id: string) => {\n  const res = await api.get(`/users/${id}`);\n  return res.data;\n}', type: 'code', tags: ['ts'], createdAt: new Date(Date.now() - 7200000).toISOString() },
-  { id: '4', content: 'Review Sarah\'s PR for dashboard feature', type: 'todo', tags: [], createdAt: new Date(Date.now() - 86400000).toISOString() },
-  { id: '5', content: 'The best interfaces feel inevitable — every element earns its place. Reduce until it breaks, then add back the minimum. This is the core principle of good design. When you look at something and nothing feels out of place, when every pixel serves a purpose.', type: 'insight', tags: ['design'], createdAt: new Date(Date.now() - 90000000).toISOString() },
-  { id: '6', content: 'Switched to Vite. Cold starts under 300ms now.', type: 'thought', tags: ['dx'], createdAt: new Date(Date.now() - 172800000).toISOString() },
-  { id: '7', content: 'interface Thought {\n  id: string\n  content: string\n  type: ThoughtType\n  tags: string[]\n  embedding?: number[]\n  createdAt: Date\n  updatedAt: Date\n  userId: string\n}', type: 'code', tags: ['types'], createdAt: new Date(Date.now() - 200000000).toISOString() },
-  { id: '8', content: 'https://linear.app/ragbrain/issue/RAG-42', type: 'link', tags: [], createdAt: new Date(Date.now() - 250000000).toISOString() },
-]
+// Infinite scroll
+const loadMoreRef = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
 
-// Use API data or fallback to mock
+// Filter and sort thoughts (no mock fallback)
 const displayThoughts = computed(() => {
-  const data = thoughts.value.length ? thoughts.value : mockThoughts
-
   let filtered = filterType.value === 'all'
-    ? data
-    : data.filter((t) => t.type === filterType.value)
+    ? thoughts.value
+    : thoughts.value.filter((t) => t.type === filterType.value)
 
   return filtered.sort((a, b) => {
     const dateA = new Date(a.createdAt).getTime()
@@ -72,7 +69,7 @@ const formatTime = (date: string) => {
 }
 
 const openThought = (thought: Thought) => {
-  if (isTruncated(thought.content)) {
+  if (isTruncated(thought.text)) {
     selectedThought.value = thought
   }
 }
@@ -93,6 +90,27 @@ const typeFilters: Array<{ value: ThoughtType | 'all'; label: string }> = [
 
 onMounted(() => {
   fetchThoughts()
+
+  // Setup Intersection Observer for infinite scroll
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting && hasMore.value && !isLoadingMore.value) {
+        fetchMoreThoughts()
+      }
+    },
+    { rootMargin: '200px' }
+  )
+})
+
+// Watch for loadMoreRef to be available, then observe it
+watch(loadMoreRef, (el) => {
+  if (el && observer) {
+    observer.observe(el)
+  }
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
 })
 </script>
 
@@ -124,9 +142,9 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- Loading -->
+    <!-- Initial Loading -->
     <div v-if="isLoading" class="text-center py-16">
-      <div class="text-text-tertiary text-sm">Loading...</div>
+      <div class="text-text-tertiary text-sm">Loading thoughts...</div>
     </div>
 
     <!-- Masonry grid -->
@@ -139,7 +157,7 @@ onMounted(() => {
           'before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:rounded-full',
           typeAccent[thought.type] || typeAccent.thought,
           'group',
-          isTruncated(thought.content) ? 'cursor-pointer' : ''
+          isTruncated(thought.text) ? 'cursor-pointer' : ''
         ]"
         @click="openThought(thought)"
       >
@@ -153,10 +171,10 @@ onMounted(() => {
                   ? 'text-sm text-sky-500 dark:text-sky-400 hover:underline break-all'
                   : 'text-[15px] leading-relaxed'
             ]"
-          >{{ truncate(thought.content) }}</p>
+          >{{ truncate(thought.text) }}</p>
 
           <button
-            v-if="isTruncated(thought.content)"
+            v-if="isTruncated(thought.text)"
             class="mt-2 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
           >
             Show more
@@ -171,8 +189,18 @@ onMounted(() => {
       </article>
     </div>
 
+    <!-- Load more sentinel -->
+    <div ref="loadMoreRef" class="py-8 flex justify-center">
+      <div v-if="isLoadingMore" class="text-text-tertiary text-sm">
+        Loading more...
+      </div>
+      <div v-else-if="!hasMore && thoughts.length > 0" class="text-text-tertiary text-xs">
+        End of thoughts
+      </div>
+    </div>
+
     <!-- Empty state -->
-    <div v-if="!isLoading && displayThoughts.length === 0" class="text-center py-32">
+    <div v-if="!isLoading && thoughts.length === 0" class="text-center py-32">
       <p class="text-text-tertiary text-sm">
         {{ filterType === 'all' ? 'No thoughts yet' : `No ${filterType}s found` }}
       </p>
@@ -210,7 +238,7 @@ onMounted(() => {
                       ? 'text-sky-500 dark:text-sky-400 hover:underline break-all'
                       : 'text-[15px] leading-relaxed'
                 ]"
-              >{{ selectedThought.content }}</p>
+              >{{ selectedThought.text }}</p>
 
               <div class="flex items-center gap-2 mt-6 pt-4 border-t border-border-secondary text-[11px] text-text-tertiary">
                 <span class="uppercase tracking-wider">{{ selectedThought.type }}</span>

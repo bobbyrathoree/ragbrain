@@ -2,7 +2,7 @@ export type ThoughtType = 'thought' | 'decision' | 'insight' | 'code' | 'todo' |
 
 export interface Thought {
   id: string
-  content: string
+  text: string
   type: ThoughtType
   tags: string[]
   createdAt: string
@@ -13,15 +13,16 @@ export interface AskResponse {
   answer: string
   confidence: number
   citations: Citation[]
-  processingTimeMs: number
+  processingTime: number
 }
 
 export interface Citation {
-  thoughtId: string
-  content: string
-  type: ThoughtType
+  id: string
+  preview: string
+  type: string
   score: number
   createdAt: string
+  tags?: string[]
 }
 
 export interface GraphNode {
@@ -32,15 +33,27 @@ export interface GraphNode {
   y: number
   z: number
   importance: number
+  tags?: string[]
+  recency?: number
+  type?: string
 }
 
 export interface GraphEdge {
   source: string
   target: string
-  weight: number
+  similarity: number  // Renamed from weight to match backend
+}
+
+export interface GraphCluster {
+  id: string
+  label: string
+  color: string
+  count: number
+  nodeIds?: string[]
 }
 
 export interface GraphData {
   nodes: GraphNode[]
   edges: GraphEdge[]
+  clusters: GraphCluster[]
 }

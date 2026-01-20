@@ -373,7 +373,7 @@ const timeWindows = [
                   <span>{{ Math.round(askResponse.confidence * 100) }}%</span>
                 </div>
                 <span>·</span>
-                <span>{{ askResponse.processingTimeMs }}ms</span>
+                <span>{{ askResponse.processingTime }}ms</span>
               </div>
 
               <!-- Citations -->
@@ -382,10 +382,10 @@ const timeWindows = [
                 <div class="space-y-2">
                   <div
                     v-for="citation in askResponse.citations"
-                    :key="citation.thoughtId"
+                    :key="citation.id"
                     class="p-3 bg-bg-tertiary/50 rounded-lg"
                   >
-                    <p class="text-sm text-text-primary line-clamp-2">{{ citation.content }}</p>
+                    <p class="text-sm text-text-primary line-clamp-2">{{ citation.preview }}</p>
                     <div class="flex items-center gap-2 mt-2 text-xs text-text-tertiary">
                       <span class="uppercase">{{ citation.type }}</span>
                       <span>·</span>

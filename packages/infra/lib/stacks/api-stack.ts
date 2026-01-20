@@ -22,7 +22,7 @@ interface ApiStackProps extends cdk.StackProps {
   exportLambda: lambda.Function;
   apiKeySecret: secretsmanager.ISecret;
   thoughtsTable: dynamodb.ITable;
-  sharedLayer: lambda.ILayerVersion;
+  // Note: sharedLayer removed - created locally to avoid cross-stack export issues
 }
 
 export class ApiStack extends cdk.Stack {
@@ -43,8 +43,15 @@ export class ApiStack extends cdk.Stack {
       exportLambda,
       apiKeySecret,
       thoughtsTable,
-      sharedLayer,
     } = props;
+
+    // Create shared layer locally to avoid cross-stack export issues
+    // This layer is used by the authorizer lambda
+    const sharedLayer = new lambda.LayerVersion(this, 'SharedLayer', {
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../layers/shared')),
+      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
+      description: 'Shared dependencies for API stack Lambda functions',
+    });
 
     // Common bundling options
     const bundlingOptions = {
@@ -89,7 +96,7 @@ export class ApiStack extends cdk.Stack {
     // Desktop/mobile apps using custom schemes must handle CORS differently or use '*' carefully
     const allowedOrigins = environment === 'prod'
       ? ['https://ragbrain.app', 'https://www.ragbrain.app']
-      : ['http://localhost:3000', 'http://localhost:8080'];
+      : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080'];
 
     // Create HTTP API
     this.api = new apigateway.HttpApi(this, 'HttpApi', {

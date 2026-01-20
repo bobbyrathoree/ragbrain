@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useThoughts } from '@/composables/useThoughts'
+
+const { thoughts, fetchThoughts } = useThoughts()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
-const selectedStar = ref<{ id: string; content: string; type: string; x: number; y: number } | null>(null)
+const selectedStar = ref<{ id: string; text: string; type: string; x: number; y: number } | null>(null)
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
 
 interface Star {
@@ -15,7 +18,7 @@ interface Star {
   twinklePhase: number
   color: string
   isThought: boolean
-  content?: string
+  text?: string
   type?: string
 }
 
@@ -42,17 +45,27 @@ let ctx: CanvasRenderingContext2D | null = null
 let canvasWidth = 0
 let canvasHeight = 0
 
-// Mock thought data
-const thoughtData = [
-  { id: '1', content: 'OAuth vs JWT decision', type: 'decision' },
-  { id: '2', content: 'Performance insights', type: 'insight' },
-  { id: '3', content: 'API fetch function', type: 'code' },
-  { id: '4', content: 'Review PR', type: 'todo' },
-  { id: '5', content: 'Design principles', type: 'insight' },
-  { id: '6', content: 'Vite migration', type: 'thought' },
-  { id: '7', content: 'Type definitions', type: 'code' },
-  { id: '8', content: 'Linear issue link', type: 'link' },
-]
+// Thought data from API (with fallback)
+const thoughtData = computed(() => {
+  if (thoughts.value.length > 0) {
+    return thoughts.value.map(t => ({
+      id: t.id,
+      text: t.text,
+      type: t.type
+    }))
+  }
+  // Fallback mock data
+  return [
+    { id: '1', text: 'OAuth vs JWT decision', type: 'decision' },
+    { id: '2', text: 'Performance insights', type: 'insight' },
+    { id: '3', text: 'API fetch function', type: 'code' },
+    { id: '4', text: 'Review PR', type: 'todo' },
+    { id: '5', text: 'Design principles', type: 'insight' },
+    { id: '6', text: 'Vite migration', type: 'thought' },
+    { id: '7', text: 'Type definitions', type: 'code' },
+    { id: '8', text: 'Linear issue link', type: 'link' },
+  ]
+})
 
 const initCanvas = () => {
   const canvas = canvasRef.value
@@ -88,7 +101,7 @@ const initCanvas = () => {
   }
 
   // Thought stars
-  thoughtData.forEach((thought) => {
+  thoughtData.value.forEach((thought) => {
     stars.push({
       id: thought.id,
       x: 150 + Math.random() * (canvasWidth - 300),
@@ -99,7 +112,7 @@ const initCanvas = () => {
       twinklePhase: Math.random() * Math.PI * 2,
       color: typeColors[thought.type] || '#a1a1aa',
       isThought: true,
-      content: thought.content,
+      text: thought.text,
       type: thought.type,
     })
   })
@@ -159,7 +172,7 @@ const handleClick = (e: MouseEvent) => {
       const transformed = getTransformedPos(star.x, star.y)
       selectedStar.value = {
         id: star.id,
-        content: star.content || '',
+        text: star.text || '',
         type: star.type || 'thought',
         x: transformed.x,
         y: transformed.y,
@@ -247,6 +260,7 @@ const animate = () => {
 }
 
 onMounted(() => {
+  fetchThoughts()
   initCanvas()
   animate()
 
@@ -284,7 +298,7 @@ onUnmounted(() => {
           <div class="w-2 h-2 rounded-full" :style="{ backgroundColor: typeColors[selectedStar.type] }" />
           <span class="text-xs text-text-tertiary uppercase tracking-wider">{{ selectedStar.type }}</span>
         </div>
-        <p class="text-sm text-text-primary">{{ selectedStar.content }}</p>
+        <p class="text-sm text-text-primary">{{ selectedStar.text }}</p>
         <button
           @click="selectedStar = null"
           class="mt-3 text-xs text-text-tertiary hover:text-text-secondary"

@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useThoughts } from '@/composables/useThoughts'
+
+const { thoughts, fetchThoughts } = useThoughts()
 
 const currentMonth = ref(new Date())
 const selectedDate = ref<string | null>(null)
@@ -14,21 +17,31 @@ const typeColors: Record<string, string> = {
   link: 'bg-rose-400',
 }
 
-// Mock thoughts per date
-const thoughtsByDate: Record<string, Array<{ id: string; content: string; type: string; time: string }>> = {
-  [`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-15`]: [
-    { id: '1', content: 'OAuth vs JWT decision - going with JWT for statelessness', type: 'decision', time: '10:30 AM' },
-    { id: '2', content: 'Performance optimization is priority #1', type: 'insight', time: '2:15 PM' },
-    { id: '3', content: 'Reviewed dashboard PR', type: 'todo', time: '4:45 PM' },
-  ],
-  [`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-14`]: [
-    { id: '4', content: 'const fetchUser = async (id) => {...}', type: 'code', time: '9:00 AM' },
-    { id: '5', content: 'Design principles notes', type: 'insight', time: '11:30 AM' },
-  ],
-  [`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-12`]: [
-    { id: '6', content: 'Switched build tool to Vite', type: 'thought', time: '3:00 PM' },
-  ],
-}
+// Group thoughts by date from API data
+const thoughtsByDate = computed(() => {
+  const grouped: Record<string, Array<{ id: string; text: string; type: string; time: string }>> = {}
+
+  for (const thought of thoughts.value) {
+    const date = thought.createdAt.split('T')[0] // YYYY-MM-DD
+    const time = new Date(thought.createdAt).toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    })
+
+    if (!grouped[date]) grouped[date] = []
+    grouped[date].push({
+      id: thought.id,
+      text: thought.text,
+      type: thought.type,
+      time
+    })
+  }
+
+  return grouped
+})
+
+onMounted(() => fetchThoughts())
 
 const monthName = computed(() => {
   return currentMonth.value.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
@@ -48,8 +61,8 @@ const heatmapData = computed(() => {
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    const thoughts = thoughtsByDate[dateStr] || []
-    days.push({ date: dateStr, count: thoughts.length || Math.floor(Math.random() * 6) })
+    const dayThoughts = thoughtsByDate.value[dateStr] || []
+    days.push({ date: dateStr, count: dayThoughts.length })
   }
 
   return days
@@ -57,7 +70,7 @@ const heatmapData = computed(() => {
 
 const selectedDateThoughts = computed(() => {
   if (!selectedDate.value) return []
-  return thoughtsByDate[selectedDate.value] || []
+  return thoughtsByDate.value[selectedDate.value] || []
 })
 
 const formatSelectedDate = computed(() => {
@@ -178,7 +191,7 @@ const selectDate = (date: string) => {
                 class="relative pl-4 py-2 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:rounded-full"
                 :class="typeColors[thought.type] ? `before:${typeColors[thought.type]}` : 'before:bg-stone-400'"
               >
-                <p class="text-sm text-text-primary">{{ thought.content }}</p>
+                <p class="text-sm text-text-primary">{{ thought.text }}</p>
                 <div class="flex items-center gap-2 mt-1 text-[10px] text-text-tertiary">
                   <span class="uppercase tracking-wider">{{ thought.type }}</span>
                   <span>·</span>

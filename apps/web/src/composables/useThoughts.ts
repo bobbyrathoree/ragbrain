@@ -4,19 +4,42 @@ import type { Thought } from '@/types'
 
 const thoughts = ref<Thought[]>([])
 const isLoading = ref(false)
+const isLoadingMore = ref(false)
 const error = ref<string | null>(null)
+const cursor = ref<string | undefined>(undefined)
+const hasMore = ref(true)
 
 export function useThoughts() {
-  const fetchThoughts = async () => {
+  const fetchThoughts = async (limit = 50) => {
     isLoading.value = true
     error.value = null
+    cursor.value = undefined
+    hasMore.value = true
     try {
-      const response = await thoughtsApi.list()
+      const response = await thoughtsApi.list(limit)
       thoughts.value = response.thoughts
+      cursor.value = response.cursor
+      hasMore.value = response.hasMore ?? !!response.cursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch thoughts'
     } finally {
       isLoading.value = false
+    }
+  }
+
+  const fetchMoreThoughts = async (limit = 50) => {
+    if (!hasMore.value || isLoadingMore.value || !cursor.value) return
+
+    isLoadingMore.value = true
+    try {
+      const response = await thoughtsApi.list(limit, cursor.value)
+      thoughts.value.push(...response.thoughts)
+      cursor.value = response.cursor
+      hasMore.value = response.hasMore ?? !!response.cursor
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to fetch more thoughts'
+    } finally {
+      isLoadingMore.value = false
     }
   }
 
@@ -44,8 +67,11 @@ export function useThoughts() {
   return {
     thoughts,
     isLoading,
+    isLoadingMore,
+    hasMore,
     error,
     fetchThoughts,
+    fetchMoreThoughts,
     createThought,
     deleteThought,
   }

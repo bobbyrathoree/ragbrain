@@ -2,27 +2,24 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { graphApi } from '@/api'
 
 const containerRef = ref<HTMLDivElement | null>(null)
 const selectedNode = ref<{ id: string; label: string; cluster: string } | null>(null)
 const hoveredNode = ref<{ id: string; label: string; x: number; y: number } | null>(null)
 const sidebarOpen = ref(false)
+const isLoading = ref(true)
+const loadError = ref<string | null>(null)
 
-// Cluster colors
-const clusterColors: Record<string, number> = {
-  technology: 0x8b5cf6,
-  work: 0x3b82f6,
-  personal: 0x22c55e,
-  learning: 0xf97316,
-  other: 0x6b7280,
-}
-
-const clusters = [
-  { id: 'technology', name: 'Technology', color: '#8B5CF6', count: 0 },
-  { id: 'work', name: 'Work', color: '#3B82F6', count: 0 },
-  { id: 'personal', name: 'Personal', color: '#22C55E', count: 0 },
-  { id: 'learning', name: 'Learning', color: '#F97316', count: 0 },
+// Default cluster colors (used as fallback)
+const defaultClusterColors = [
+  0xff6b6b, 0x4ecdc4, 0x45b7d1, 0x96ceb4, 0xfeca57, 0xdda0dd
 ]
+const otherClusterColor = 0x6b7280
+
+// Dynamic clusters from API
+const clusters = ref<{ id: string; name: string; color: string; count: number }[]>([])
+const clusterColorMap = ref<Record<string, number>>({})
 
 interface GraphNode {
   id: string
@@ -35,7 +32,7 @@ interface GraphNode {
 interface GraphEdge {
   source: string
   target: string
-  weight: number
+  similarity: number
 }
 
 let scene: THREE.Scene
@@ -51,18 +48,32 @@ let edgeLines: THREE.LineSegments
 
 // Generate mock graph data
 const generateGraphData = () => {
-  const clusterKeys = Object.keys(clusterColors)
+  // Set up mock clusters
+  const mockClusterDefs = [
+    { id: 'cluster-0', name: 'Technology', color: '#FF6B6B' },
+    { id: 'cluster-1', name: 'Work', color: '#4ECDC4' },
+    { id: 'cluster-2', name: 'Personal', color: '#45B7D1' },
+    { id: 'cluster-3', name: 'Learning', color: '#96CEB4' },
+  ]
+
+  // Set up cluster color map for rendering
+  clusterColorMap.value = {}
+  mockClusterDefs.forEach((c) => {
+    clusterColorMap.value[c.id] = parseInt(c.color.slice(1), 16)
+  })
+
+  const clusterIds = mockClusterDefs.map(c => c.id)
   nodes = []
 
   for (let i = 0; i < 40; i++) {
-    const cluster = clusterKeys[Math.floor(Math.random() * clusterKeys.length)]
+    const cluster = clusterIds[Math.floor(Math.random() * clusterIds.length)]
     const theta = Math.random() * Math.PI * 2
     const phi = Math.acos(2 * Math.random() - 1)
     const radius = 3 + Math.random() * 2
 
     nodes.push({
       id: `node-${i}`,
-      label: `Thought ${i + 1}`,
+      label: `Sample thought ${i + 1}: This is demo content`,
       cluster,
       position: new THREE.Vector3(
         radius * Math.sin(phi) * Math.cos(theta),
@@ -72,10 +83,13 @@ const generateGraphData = () => {
     })
   }
 
-  // Update cluster counts
-  clusters.forEach((c) => {
-    c.count = nodes.filter((n) => n.cluster === c.id).length
-  })
+  // Update clusters ref with counts
+  clusters.value = mockClusterDefs.map((c) => ({
+    id: c.id,
+    name: c.name,
+    color: c.color,
+    count: nodes.filter((n) => n.cluster === c.id).length,
+  }))
 
   // Generate edges between nearby nodes
   const edges: GraphEdge[] = []
@@ -86,7 +100,7 @@ const generateGraphData = () => {
         edges.push({
           source: nodes[i].id,
           target: nodes[j].id,
-          weight: 1 - dist / 3,
+          similarity: 1 - dist / 3,
         })
       }
     }
@@ -95,8 +109,9 @@ const generateGraphData = () => {
   return { nodes, edges }
 }
 
-const initScene = () => {
-  if (!containerRef.value) return
+// Setup scene basics (shared between initScene and initSceneWithData)
+const setupScene = () => {
+  if (!containerRef.value) return false
 
   const width = containerRef.value.clientWidth
   const height = containerRef.value.clientHeight
@@ -134,14 +149,18 @@ const initScene = () => {
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
 
-  // Generate and render graph
-  const { nodes: graphNodes, edges } = generateGraphData()
+  return true
+}
+
+// Render nodes and edges to the scene
+const renderGraph = (graphNodes: GraphNode[], edges: GraphEdge[]) => {
+  const isDark = document.documentElement.classList.contains('dark')
 
   // Create node meshes
   const nodeGeometry = new THREE.SphereGeometry(0.15, 16, 16)
   graphNodes.forEach((node) => {
     const material = new THREE.MeshStandardMaterial({
-      color: clusterColors[node.cluster] || 0x6b7280,
+      color: clusterColorMap.value[node.cluster] || otherClusterColor,
       roughness: 0.4,
       metalness: 0.3,
     })
@@ -174,6 +193,19 @@ const initScene = () => {
   })
   edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial)
   scene.add(edgeLines)
+}
+
+// Initialize scene with API data
+const initSceneWithData = (graphNodes: GraphNode[], edges: GraphEdge[]) => {
+  if (!setupScene()) return
+  renderGraph(graphNodes, edges)
+}
+
+// Initialize scene with generated mock data
+const initScene = () => {
+  if (!setupScene()) return
+  const { nodes: graphNodes, edges } = generateGraphData()
+  renderGraph(graphNodes, edges)
 }
 
 const onMouseMove = (event: MouseEvent) => {
@@ -235,8 +267,52 @@ watch(() => document.documentElement.classList.contains('dark'), (isDark) => {
   }
 })
 
-onMounted(() => {
-  initScene()
+onMounted(async () => {
+  isLoading.value = true
+  loadError.value = null
+
+  try {
+    // Try to fetch real graph data from API
+    const apiData = await graphApi.get()
+    if (apiData.nodes && apiData.nodes.length > 0) {
+      // Set up clusters from API response
+      if (apiData.clusters && apiData.clusters.length > 0) {
+        // Build cluster color map for rendering
+        clusterColorMap.value = {}
+        apiData.clusters.forEach((c, index) => {
+          clusterColorMap.value[c.id] = parseInt(c.color.slice(1), 16) || defaultClusterColors[index % defaultClusterColors.length]
+        })
+
+        // Update clusters ref for sidebar display
+        clusters.value = apiData.clusters.map((c) => ({
+          id: c.id,
+          name: c.label,
+          color: c.color,
+          count: c.count,
+        }))
+      }
+
+      // Transform API nodes to our format
+      nodes = apiData.nodes.map((n) => ({
+        id: n.id,
+        label: n.label,  // Real label from backend
+        cluster: n.cluster,  // Real cluster from backend
+        position: new THREE.Vector3(n.x || 0, n.y || 0, n.z || 0),
+      }))
+
+      initSceneWithData(nodes, apiData.edges || [])
+    } else {
+      // No data from API, use generated mock
+      initScene()
+    }
+  } catch (e) {
+    console.warn('Failed to load graph from API, using generated data:', e)
+    loadError.value = 'Using demo data'
+    initScene()
+  } finally {
+    isLoading.value = false
+  }
+
   animate()
   window.addEventListener('resize', onResize)
   containerRef.value?.addEventListener('mousemove', onMouseMove)

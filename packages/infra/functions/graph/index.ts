@@ -48,6 +48,11 @@ interface ThoughtWithEmbedding {
   decisionScore: number;
 }
 
+function truncateText(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen).trim() + '…';
+}
+
 // UMAP implementation (simplified for demo - in production use a proper library)
 class SimpleUMAP {
   private dimensions: number;
@@ -218,9 +223,11 @@ function buildGraph(
     const age = now - thought.createdAt;
     const maxAge = 365 * 24 * 60 * 60 * 1000; // 1 year
     const recency = Math.max(0, 1 - age / maxAge);
-    
+
     return {
       id: thought.id,
+      label: truncateText(thought.text, 60),
+      cluster: 'other', // Will be assigned after detectClusters
       x,
       y,
       z,
@@ -446,15 +453,37 @@ export const handler = async (
     
     // Build graph
     const { nodes, edges } = buildGraph(thoughts, params.minSimilarity);
-    
+
     // Detect clusters
     const clusters = detectClusters(nodes, edges);
-    
+
+    // Assign cluster IDs to nodes based on detectClusters result
+    const nodeClusterMap = new Map<string, string>();
+    clusters.forEach(cluster => {
+      cluster.nodeIds.forEach(nodeId => {
+        nodeClusterMap.set(nodeId, cluster.id);
+      });
+    });
+
+    // Update nodes with their assigned cluster
+    nodes.forEach(node => {
+      node.cluster = nodeClusterMap.get(node.id) || 'other';
+    });
+
+    // Add count to clusters for the response
+    const clustersWithCount = clusters.map(c => ({
+      id: c.id,
+      label: c.label,
+      color: c.color,
+      count: c.nodeIds.length,
+      nodeIds: c.nodeIds,
+    }));
+
     // Prepare response
     const response: GraphResponse = {
       nodes,
       edges,
-      clusters,
+      clusters: clustersWithCount,
       metadata: {
         totalNodes: nodes.length,
         totalEdges: edges.length,

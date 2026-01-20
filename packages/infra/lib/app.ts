@@ -51,6 +51,7 @@ const computeStack = new ComputeStack(app, `${project}-compute-${env}`, {
 });
 
 // API Gateway
+// Note: API stack creates its own shared layer to avoid cross-stack export issues
 const apiStack = new ApiStack(app, `${project}-api-${env}`, {
   ...stackProps,
   projectName: project,
@@ -63,7 +64,6 @@ const apiStack = new ApiStack(app, `${project}-api-${env}`, {
   exportLambda: computeStack.exportLambda,
   apiKeySecret: storageStack.apiKeySecret,
   thoughtsTable: storageStack.thoughtsTable,
-  sharedLayer: computeStack.sharedLayer,
 });
 
 // Monitoring and alerting
