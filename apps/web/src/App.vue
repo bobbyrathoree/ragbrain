@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { marked } from 'marked'
 import { detectType } from '@/lib/typeDetection'
 import { extractTags } from '@/lib/tagExtraction'
 import { useThoughts } from '@/composables/useThoughts'
 import { useAsk } from '@/composables/useAsk'
 import type { ThoughtType, AskResponse } from '@/types'
+
+// Configure marked for GitHub-flavored markdown
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+})
 
 const router = useRouter()
 const route = useRoute()
@@ -35,7 +42,6 @@ const commands: Command[] = [
   { id: 'feed', label: 'Go to Feed', shortcut: '1', action: () => { commandPaletteOpen.value = false; router.push('/') } },
   { id: 'graph', label: 'Go to Graph', shortcut: '2', action: () => { commandPaletteOpen.value = false; router.push('/graph') } },
   { id: 'timeline', label: 'Go to Timeline', shortcut: '3', action: () => { commandPaletteOpen.value = false; router.push('/timeline') } },
-  { id: 'stars', label: 'Go to Stars', shortcut: '4', action: () => { commandPaletteOpen.value = false; router.push('/stars') } },
   { id: 'theme-light', label: 'Switch to light theme', action: () => { commandPaletteOpen.value = false; setTheme('light') } },
   { id: 'theme-dark', label: 'Switch to dark theme', action: () => { commandPaletteOpen.value = false; setTheme('dark') } },
   { id: 'settings', label: 'Open settings', action: () => { commandPaletteOpen.value = false; settingsOpen.value = true } },
@@ -80,6 +86,17 @@ const isSaving = ref(false)
 const askQuery = ref('')
 const askTimeWindow = ref<number | undefined>(undefined)
 const askResponse = ref<AskResponse | null>(null)
+
+// Input refs for auto-focus
+const captureTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const askInputRef = ref<HTMLInputElement | null>(null)
+const commandInputRef = ref<HTMLInputElement | null>(null)
+
+// Formatted markdown answer
+const formattedAnswer = computed(() => {
+  if (!askResponse.value?.answer) return ''
+  return marked.parse(askResponse.value.answer) as string
+})
 
 // Settings state (localStorage overrides env vars)
 const apiKey = ref(localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || '')
@@ -146,10 +163,32 @@ const saveSettings = () => {
   fetchThoughts()
 }
 
-// Reset modals on close
-watch(captureOpen, (open) => { if (!open) captureContent.value = '' })
-watch(askOpen, (open) => { if (!open) { askQuery.value = ''; askResponse.value = null } })
-watch(commandPaletteOpen, (open) => { if (!open) { commandQuery.value = ''; selectedCommandIndex.value = 0 } })
+// Modal state watchers with auto-focus
+watch(captureOpen, (open) => {
+  if (open) {
+    nextTick(() => captureTextareaRef.value?.focus())
+  } else {
+    captureContent.value = ''
+  }
+})
+
+watch(askOpen, (open) => {
+  if (open) {
+    nextTick(() => askInputRef.value?.focus())
+  } else {
+    askQuery.value = ''
+    askResponse.value = null
+  }
+})
+
+watch(commandPaletteOpen, (open) => {
+  if (open) {
+    nextTick(() => commandInputRef.value?.focus())
+  } else {
+    commandQuery.value = ''
+    selectedCommandIndex.value = 0
+  }
+})
 
 // Global keyboard shortcuts
 const handleKeydown = (e: KeyboardEvent) => {
@@ -175,11 +214,12 @@ const handleKeydown = (e: KeyboardEvent) => {
     return
   }
 
-  if (e.altKey && e.key.toLowerCase() === 's') {
+  // Use e.code for physical key location - works on macOS where Option+S produces 'ß'
+  if (e.altKey && e.code === 'KeyS') {
     e.preventDefault()
     captureOpen.value = true
   }
-  if (e.altKey && e.key.toLowerCase() === 'f') {
+  if (e.altKey && e.code === 'KeyF') {
     e.preventDefault()
     askOpen.value = true
   }
@@ -190,7 +230,7 @@ const handleKeydown = (e: KeyboardEvent) => {
     commandPaletteOpen.value = false
   }
 
-  const routes: Record<string, string> = { '1': '/', '2': '/graph', '3': '/timeline', '4': '/stars' }
+  const routes: Record<string, string> = { '1': '/', '2': '/graph', '3': '/timeline' }
   if (routes[e.key] && !captureOpen.value && !askOpen.value && !commandPaletteOpen.value) {
     router.push(routes[e.key])
   }
@@ -203,8 +243,7 @@ const views = [
   { path: '/', label: 'Feed', key: '1' },
   { path: '/graph', label: 'Graph', key: '2' },
   { path: '/timeline', label: 'Timeline', key: '3' },
-  { path: '/stars', label: 'Stars', key: '4' },
-]
+  ]
 
 const timeWindows = [
   { value: undefined, label: 'All time' },
@@ -292,8 +331,8 @@ const timeWindows = [
 
             <div class="px-6 pb-4">
               <textarea
+                ref="captureTextareaRef"
                 v-model="captureContent"
-                autofocus
                 placeholder="What's on your mind?"
                 class="w-full h-40 bg-transparent text-text-primary text-[15px] leading-relaxed placeholder:text-text-tertiary resize-none focus:outline-none"
                 @keydown.meta.enter.prevent="handleCaptureSave"
@@ -330,8 +369,8 @@ const timeWindows = [
             <!-- Query input -->
             <div class="p-4 border-b border-border-secondary">
               <input
+                ref="askInputRef"
                 v-model="askQuery"
-                autofocus
                 type="text"
                 placeholder="Ask your knowledge..."
                 class="w-full bg-transparent text-text-primary text-lg placeholder:text-text-tertiary focus:outline-none"
@@ -361,8 +400,11 @@ const timeWindows = [
             </div>
 
             <div v-else-if="askResponse" class="p-4 max-h-96 overflow-auto">
-              <!-- Answer -->
-              <p class="text-text-primary text-[15px] leading-relaxed">{{ askResponse.answer }}</p>
+              <!-- Answer with markdown rendering -->
+              <div
+                class="prose prose-sm dark:prose-invert max-w-none prose-p:text-text-primary prose-headings:text-text-primary prose-code:text-emerald-600 dark:prose-code:text-emerald-400 prose-code:bg-bg-tertiary prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-bg-tertiary prose-pre:border prose-pre:border-border-secondary"
+                v-html="formattedAnswer"
+              />
 
               <!-- Confidence -->
               <div class="flex items-center gap-3 mt-4 text-xs text-text-tertiary">
@@ -491,8 +533,8 @@ const timeWindows = [
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               <input
+                ref="commandInputRef"
                 v-model="commandQuery"
-                autofocus
                 type="text"
                 placeholder="Search commands..."
                 class="flex-1 bg-transparent text-text-primary text-sm placeholder:text-text-tertiary focus:outline-none"

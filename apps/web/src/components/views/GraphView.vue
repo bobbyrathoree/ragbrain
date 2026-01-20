@@ -9,6 +9,7 @@ const svgRef = ref<SVGSVGElement | null>(null)
 const selectedNode = ref<GraphNode | null>(null)
 const hoveredNode = ref<{ node: GraphNode; x: number; y: number } | null>(null)
 const expandedTheme = ref<string | null>(null)
+const sidebarCollapsed = ref(true)  // Collapsed by default
 const isLoading = ref(true)
 const loadError = ref<string | null>(null)
 
@@ -22,7 +23,9 @@ let simulation: d3.Simulation<GraphNode, GraphEdge> | null = null
 let svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null
 let nodeElements: d3.Selection<SVGCircleElement, GraphNode, SVGGElement, unknown> | null = null
 let edgeElements: d3.Selection<SVGLineElement, GraphEdge, SVGGElement, unknown> | null = null
+let labelElements: d3.Selection<SVGTextElement, GraphNode, SVGGElement, unknown> | null = null
 let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null
+let currentZoom = 0.8
 
 // Create color scale from themes
 const colorScale = computed(() => {
@@ -53,11 +56,18 @@ function initForceGraph() {
   // Create container group for zoom/pan
   const g = svg.append('g')
 
-  // Set up zoom behavior
+  // Set up zoom behavior with label visibility tracking
   zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
     .scaleExtent([0.1, 4])
     .on('zoom', (event) => {
       g.attr('transform', event.transform)
+      currentZoom = event.transform.k
+      // Show all labels when zoomed in (> 1.5x), otherwise only show important ones
+      if (labelElements) {
+        labelElements.attr('opacity', (d: GraphNode) =>
+          currentZoom > 1.5 || d.importance > 0.6 ? 1 : 0
+        )
+      }
     })
 
   svg.call(zoomBehavior)
@@ -74,18 +84,18 @@ function initForceGraph() {
   // Create edge elements
   edgeElements = g.append('g')
     .attr('class', 'edges')
-    .selectAll('line')
+    .selectAll<SVGLineElement, GraphEdge>('line')
     .data(edges.value)
     .join('line')
     .attr('stroke', 'currentColor')
     .attr('stroke-opacity', 0.2)
     .attr('stroke-width', 1)
-    .attr('class', 'text-gray-400 dark:text-gray-600')
+    .attr('class', 'text-gray-400 dark:text-gray-600') as d3.Selection<SVGLineElement, GraphEdge, SVGGElement, unknown>
 
   // Create node elements
   nodeElements = g.append('g')
     .attr('class', 'nodes')
-    .selectAll('circle')
+    .selectAll<SVGCircleElement, GraphNode>('circle')
     .data(nodes.value)
     .join('circle')
     .attr('r', d => 4 + d.importance * 6)
@@ -109,7 +119,7 @@ function initForceGraph() {
     .on('click', (_, d) => {
       selectedNode.value = d
       expandedTheme.value = d.themeId
-    })
+    }) as d3.Selection<SVGCircleElement, GraphNode, SVGGElement, unknown>
 
   // Add drag behavior
   nodeElements.call(
@@ -118,6 +128,21 @@ function initForceGraph() {
       .on('drag', dragged)
       .on('end', dragEnded)
   )
+
+  // Add text labels for nodes - show important ones by default
+  labelElements = g.append('g')
+    .attr('class', 'labels')
+    .selectAll<SVGTextElement, GraphNode>('text')
+    .data(nodes.value)
+    .join('text')
+    .attr('font-size', '9px')
+    .attr('font-weight', '500')
+    .attr('fill', 'currentColor')
+    .attr('class', 'text-text-secondary pointer-events-none select-none')
+    .attr('text-anchor', 'middle')
+    .attr('dy', d => -(4 + d.importance * 6) - 6)  // Position above node
+    .attr('opacity', d => d.importance > 0.6 ? 1 : 0)  // Only show important by default
+    .text(d => d.label.length > 20 ? d.label.slice(0, 20) + '…' : d.label) as d3.Selection<SVGTextElement, GraphNode, SVGGElement, unknown>
 
   // Create force simulation
   simulation = d3.forceSimulation<GraphNode>(nodes.value)
@@ -180,6 +205,12 @@ function ticked() {
     nodeElements
       .attr('cx', d => d.x)
       .attr('cy', d => d.y)
+  }
+
+  if (labelElements) {
+    labelElements
+      .attr('x', d => d.x)
+      .attr('y', d => d.y)
   }
 }
 
@@ -383,14 +414,53 @@ onUnmounted(() => {
 
 <template>
   <div class="h-[calc(100vh-5rem)] flex relative">
-    <!-- Theme Sidebar -->
-    <aside class="w-72 border-r border-border-secondary overflow-auto bg-bg-elevated flex-shrink-0">
-      <div class="p-4 border-b border-border-secondary">
-        <h2 class="text-sm font-semibold text-text-primary">Knowledge Themes</h2>
-        <p class="text-xs text-text-tertiary mt-1">{{ themes.length }} themes from {{ nodes.length }} thoughts</p>
+    <!-- Theme Sidebar - Collapsible -->
+    <aside :class="[
+      'border-r border-border-secondary overflow-auto bg-bg-elevated flex-shrink-0 transition-all duration-300',
+      sidebarCollapsed ? 'w-14' : 'w-72'
+    ]">
+      <!-- Collapsed view: color dots + toggle -->
+      <div v-if="sidebarCollapsed" class="p-3">
+        <button
+          @click="sidebarCollapsed = false"
+          class="w-8 h-8 flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary rounded-lg transition-colors mb-4"
+          title="Expand sidebar"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+          </svg>
+        </button>
+        <div class="space-y-3">
+          <div
+            v-for="theme in themes"
+            :key="theme.id"
+            class="w-4 h-4 mx-auto rounded-full cursor-pointer hover:scale-150 transition-transform ring-2 ring-transparent hover:ring-text-tertiary"
+            :style="{ backgroundColor: theme.color }"
+            :title="`${theme.label} (${theme.count})`"
+            @click="sidebarCollapsed = false; expandedTheme = theme.id"
+          />
+        </div>
       </div>
 
-      <div class="divide-y divide-border-secondary">
+      <!-- Expanded view: full theme list -->
+      <div v-else>
+        <div class="p-4 border-b border-border-secondary flex items-center justify-between">
+          <div>
+            <h2 class="text-sm font-semibold text-text-primary">Knowledge Themes</h2>
+            <p class="text-xs text-text-tertiary mt-1">{{ themes.length }} themes from {{ nodes.length }} thoughts</p>
+          </div>
+          <button
+            @click="sidebarCollapsed = true"
+            class="w-8 h-8 flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary rounded-lg transition-colors"
+            title="Collapse sidebar"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="divide-y divide-border-secondary">
         <div
           v-for="theme in themes"
           :key="theme.id"
@@ -454,9 +524,10 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      </div>
 
-      <!-- Selected Node Details -->
-      <div v-if="selectedNode" class="p-4 border-t border-border-secondary bg-bg-tertiary/30">
+      <!-- Selected Node Details - only show when sidebar expanded -->
+      <div v-if="selectedNode && !sidebarCollapsed" class="p-4 border-t border-border-secondary bg-bg-tertiary/30">
         <div class="flex items-center justify-between mb-2">
           <h4 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">Selected</h4>
           <button

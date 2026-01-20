@@ -354,7 +354,8 @@ Answer with citations:`;
           citations.push({
             id: hit._source.id,
             createdAt: new Date(hit._source.created_at_epoch).toISOString(),
-            preview: hit._source.summary || hit._source.text.substring(0, 200),
+            // Use verbatim thought text, not LLM-generated summary
+            preview: hit._source.text.substring(0, 300),
             score: hit._score,
             type: hit._source.type,
             tags: hit._source.tags,
@@ -377,11 +378,11 @@ Answer with citations:`;
     if (context.length > 0) {
       const topHit = context[0];
       return {
-        answer: `Based on your notes: ${topHit._source.summary || topHit._source.text.substring(0, 200)}`,
+        answer: `Based on your notes: ${topHit._source.text.substring(0, 250)}`,
         citations: [{
           id: topHit._source.id,
           createdAt: new Date(topHit._source.created_at_epoch).toISOString(),
-          preview: topHit._source.text.substring(0, 200),
+          preview: topHit._source.text.substring(0, 300),
           score: topHit._score,
           type: topHit._source.type,
           tags: topHit._source.tags,

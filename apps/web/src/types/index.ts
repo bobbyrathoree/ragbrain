@@ -35,6 +35,11 @@ export interface GraphNode {
   recency: number
   importance: number
   type: string
+  // D3 force simulation adds these dynamically
+  vx?: number
+  vy?: number
+  fx?: number | null
+  fy?: number | null
 }
 
 export interface GraphEdge {
