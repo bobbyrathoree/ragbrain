@@ -66,6 +66,8 @@ export class ComputeStack extends cdk.Stack {
         // Legacy Claude 3 models (for backwards compatibility)
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-sonnet-*`,
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-haiku-*`,
+        // Claude 3.5 Haiku (for graph theme labeling)
+        `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-5-haiku-*`,
         // Claude 4.5 inference profiles (cross-region)
         `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0`,
         `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0`,
@@ -77,6 +79,18 @@ export class ComputeStack extends cdk.Stack {
         'arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
         'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
       ],
+    });
+
+    // CloudWatch metrics policy
+    const cloudWatchMetricsPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: {
+        StringEquals: {
+          'cloudwatch:namespace': projectName,
+        },
+      },
     });
 
     // Environment variables shared across functions
@@ -255,6 +269,8 @@ export class ComputeStack extends cdk.Stack {
     // Grant permissions
     thoughtsTable.grantReadData(this.graphLambda);
     storageBucket.grantReadWrite(this.graphLambda, 'graph/*');
+    this.graphLambda.addToRolePolicy(bedrockPolicy);
+    this.graphLambda.addToRolePolicy(cloudWatchMetricsPolicy);
     this.graphLambda.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
