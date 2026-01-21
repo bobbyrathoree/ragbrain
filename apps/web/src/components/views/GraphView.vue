@@ -23,9 +23,22 @@ let simulation: d3.Simulation<GraphNode, GraphEdge> | null = null
 let svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null
 let nodeElements: d3.Selection<SVGCircleElement, GraphNode, SVGGElement, unknown> | null = null
 let edgeElements: d3.Selection<SVGLineElement, GraphEdge, SVGGElement, unknown> | null = null
-let labelElements: d3.Selection<SVGTextElement, GraphNode, SVGGElement, unknown> | null = null
+let themeLabelElements: d3.Selection<SVGGElement, GraphTheme, SVGGElement, unknown> | null = null
+let hullElements: d3.Selection<SVGPathElement, GraphTheme, SVGGElement, unknown> | null = null
 let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null
-let currentZoom = 0.8
+
+// Laser animation state
+interface LaserBeam {
+  themeId: string
+  fromNode: GraphNode | null
+  toNode: GraphNode | null
+  progress: number
+  currentNodeIndex: number
+  nodePath: GraphNode[]  // Ordered sequence of nodes to visit
+}
+let laserBeams: LaserBeam[] = []
+let laserElements: d3.Selection<SVGLineElement, LaserBeam, SVGGElement, unknown> | null = null
+let animationFrame: number | null = null
 
 // Create color scale from themes
 const colorScale = computed(() => {
@@ -38,6 +51,15 @@ const colorScale = computed(() => {
 
 function getNodeColor(node: GraphNode): string {
   return colorScale.value.get(node.themeId) || '#6b7280'
+}
+
+// Helper to lighten a hex color
+function lightenColor(hex: string, percent: number): string {
+  const num = parseInt(hex.slice(1), 16)
+  const r = Math.min(255, (num >> 16) + percent)
+  const g = Math.min(255, ((num >> 8) & 0x00FF) + percent)
+  const b = Math.min(255, (num & 0x0000FF) + percent)
+  return `rgb(${r},${g},${b})`
 }
 
 function initForceGraph() {
@@ -56,18 +78,11 @@ function initForceGraph() {
   // Create container group for zoom/pan
   const g = svg.append('g')
 
-  // Set up zoom behavior with label visibility tracking
+  // Set up zoom behavior
   zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
     .scaleExtent([0.1, 4])
     .on('zoom', (event) => {
       g.attr('transform', event.transform)
-      currentZoom = event.transform.k
-      // Show all labels when zoomed in (> 1.5x), otherwise only show important ones
-      if (labelElements) {
-        labelElements.attr('opacity', (d: GraphNode) =>
-          currentZoom > 1.5 || d.importance > 0.6 ? 1 : 0
-        )
-      }
     })
 
   svg.call(zoomBehavior)
@@ -81,6 +96,66 @@ function initForceGraph() {
     d3.zoomIdentity.translate(initialX, initialY).scale(initialScale)
   )
 
+  // Create SVG definitions for 3D effects
+  const defs = svg.append('defs')
+
+  // Radial gradients for each theme (sphere-like nodes)
+  themes.value.forEach(theme => {
+    const gradient = defs.append('radialGradient')
+      .attr('id', `node-grad-${theme.id}`)
+      .attr('cx', '30%')
+      .attr('cy', '30%')
+
+    gradient.append('stop')
+      .attr('offset', '0%')
+      .attr('stop-color', lightenColor(theme.color, 80))
+
+    gradient.append('stop')
+      .attr('offset', '100%')
+      .attr('stop-color', theme.color)
+  })
+
+  // Drop shadow filter for nodes
+  const shadow = defs.append('filter')
+    .attr('id', 'node-shadow')
+    .attr('x', '-50%')
+    .attr('y', '-50%')
+    .attr('width', '200%')
+    .attr('height', '200%')
+
+  shadow.append('feDropShadow')
+    .attr('dx', 1)
+    .attr('dy', 2)
+    .attr('stdDeviation', 2)
+    .attr('flood-opacity', 0.3)
+
+  // Glow filter for lasers
+  const glow = defs.append('filter')
+    .attr('id', 'laser-glow')
+    .attr('x', '-100%')
+    .attr('y', '-100%')
+    .attr('width', '300%')
+    .attr('height', '300%')
+
+  glow.append('feGaussianBlur')
+    .attr('stdDeviation', 4)
+    .attr('result', 'blur')
+
+  const merge = glow.append('feMerge')
+  merge.append('feMergeNode').attr('in', 'blur')
+  merge.append('feMergeNode').attr('in', 'SourceGraphic')
+
+  // Create cluster hulls (drawn behind everything)
+  hullElements = g.insert('g', ':first-child')
+    .attr('class', 'hulls')
+    .selectAll<SVGPathElement, GraphTheme>('path')
+    .data(themes.value)
+    .join('path')
+    .attr('fill', d => d.color + '08')
+    .attr('stroke', d => d.color + '20')
+    .attr('stroke-width', 1.5)
+    .attr('stroke-linejoin', 'round')
+
   // Create edge elements
   edgeElements = g.append('g')
     .attr('class', 'edges')
@@ -92,16 +167,17 @@ function initForceGraph() {
     .attr('stroke-width', 1)
     .attr('class', 'text-gray-400 dark:text-gray-600') as d3.Selection<SVGLineElement, GraphEdge, SVGGElement, unknown>
 
-  // Create node elements
+  // Create node elements with 3D gradient effect
   nodeElements = g.append('g')
     .attr('class', 'nodes')
     .selectAll<SVGCircleElement, GraphNode>('circle')
     .data(nodes.value)
     .join('circle')
     .attr('r', d => 4 + d.importance * 6)
-    .attr('fill', d => getNodeColor(d))
+    .attr('fill', d => `url(#node-grad-${d.themeId})`)
     .attr('stroke', '#fff')
     .attr('stroke-width', 1.5)
+    .attr('filter', 'url(#node-shadow)')
     .attr('cursor', 'pointer')
     .on('mouseenter', (event, d) => {
       const rect = graphContainer.value?.getBoundingClientRect()
@@ -129,20 +205,85 @@ function initForceGraph() {
       .on('end', dragEnded)
   )
 
-  // Add text labels for nodes - show important ones by default
-  labelElements = g.append('g')
-    .attr('class', 'labels')
-    .selectAll<SVGTextElement, GraphNode>('text')
-    .data(nodes.value)
-    .join('text')
-    .attr('font-size', '9px')
-    .attr('font-weight', '500')
-    .attr('fill', 'currentColor')
-    .attr('class', 'text-text-secondary pointer-events-none select-none')
+  // Add theme labels at cluster centroids
+  themeLabelElements = g.append('g')
+    .attr('class', 'theme-labels')
+    .selectAll<SVGGElement, GraphTheme>('g')
+    .data(themes.value)
+    .join('g')
+    .attr('pointer-events', 'none')
+
+  // Background pill for readability
+  themeLabelElements.append('rect')
+    .attr('rx', 12)
+    .attr('ry', 12)
+    .attr('fill', d => d.color + '15')
+    .attr('stroke', d => d.color + '30')
+    .attr('stroke-width', 1)
+
+  // Label text
+  themeLabelElements.append('text')
+    .attr('font-size', '11px')
+    .attr('font-weight', '600')
+    .attr('fill', d => d.color)
     .attr('text-anchor', 'middle')
-    .attr('dy', d => -(4 + d.importance * 6) - 6)  // Position above node
-    .attr('opacity', d => d.importance > 0.6 ? 1 : 0)  // Only show important by default
-    .text(d => d.label.length > 20 ? d.label.slice(0, 20) + '…' : d.label) as d3.Selection<SVGTextElement, GraphNode, SVGGElement, unknown>
+    .attr('dy', '0.35em')
+    .text(d => d.label)
+
+  // Size the background pills to fit text
+  themeLabelElements.each(function() {
+    const group = d3.select(this)
+    const text = group.select('text')
+    const bbox = (text.node() as SVGTextElement).getBBox()
+    group.select('rect')
+      .attr('x', bbox.x - 10)
+      .attr('y', bbox.y - 4)
+      .attr('width', bbox.width + 20)
+      .attr('height', bbox.height + 8)
+  })
+
+  // Initialize laser beams - one for each cluster, visiting all nodes
+  laserBeams = themes.value.map(theme => {
+    const themeNodes = nodes.value.filter(n => n.themeId === theme.id)
+
+    if (themeNodes.length < 2) {
+      return null // Need at least 2 nodes for a laser path
+    }
+
+    // Sort nodes by angle from centroid to create a circular path
+    const centroidX = themeNodes.reduce((sum, n) => sum + (n.x || 0), 0) / themeNodes.length
+    const centroidY = themeNodes.reduce((sum, n) => sum + (n.y || 0), 0) / themeNodes.length
+
+    const sortedNodes = [...themeNodes].sort((a, b) => {
+      const angleA = Math.atan2((a.y || 0) - centroidY, (a.x || 0) - centroidX)
+      const angleB = Math.atan2((b.y || 0) - centroidY, (b.x || 0) - centroidX)
+      return angleA - angleB
+    })
+
+    return {
+      themeId: theme.id,
+      fromNode: sortedNodes[0],
+      toNode: sortedNodes[1],
+      progress: Math.random(), // Stagger start positions
+      currentNodeIndex: 0,
+      nodePath: sortedNodes
+    }
+  }).filter((b): b is LaserBeam => b !== null && b.nodePath.length >= 2)
+
+  // Create laser line elements
+  laserElements = g.append('g')
+    .attr('class', 'lasers')
+    .selectAll<SVGLineElement, LaserBeam>('line')
+    .data(laserBeams)
+    .join('line')
+    .attr('stroke', d => colorScale.value.get(d.themeId) || '#fff')
+    .attr('stroke-width', 3)
+    .attr('stroke-linecap', 'round')
+    .attr('filter', 'url(#laser-glow)')
+    .attr('opacity', 0.8)
+
+  // Start laser animation
+  animateLasers()
 
   // Create force simulation
   simulation = d3.forceSimulation<GraphNode>(nodes.value)
@@ -193,6 +334,7 @@ function forceCluster() {
 }
 
 function ticked() {
+  // Update edge positions
   if (edgeElements) {
     edgeElements
       .attr('x1', d => (d.source as unknown as GraphNode).x)
@@ -201,17 +343,117 @@ function ticked() {
       .attr('y2', d => (d.target as unknown as GraphNode).y)
   }
 
+  // Update node positions
   if (nodeElements) {
     nodeElements
       .attr('cx', d => d.x)
       .attr('cy', d => d.y)
   }
 
-  if (labelElements) {
-    labelElements
-      .attr('x', d => d.x)
-      .attr('y', d => d.y)
+  // Update cluster hulls
+  if (hullElements) {
+    hullElements.attr('d', d => {
+      const themeNodes = nodes.value.filter(n => n.themeId === d.id)
+      if (themeNodes.length < 3) return ''
+
+      const points = themeNodes.map(n => [n.x, n.y] as [number, number])
+      const hull = d3.polygonHull(points)
+      if (!hull) return ''
+
+      // Expand hull with padding
+      const centroid = d3.polygonCentroid(hull)
+      const expanded = hull.map(p => {
+        const dx = p[0] - centroid[0]
+        const dy = p[1] - centroid[1]
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const scale = (dist + 30) / dist // 30px padding
+        return [centroid[0] + dx * scale, centroid[1] + dy * scale]
+      })
+
+      return `M${expanded.map(p => p.join(',')).join('L')}Z`
+    })
   }
+
+  // Update theme label positions OUTSIDE the cluster (above the topmost node)
+  if (themeLabelElements) {
+    themeLabelElements.each(function(d) {
+      const themeNodes = nodes.value.filter(n => n.themeId === d.id)
+      if (themeNodes.length === 0) return
+
+      // Calculate centroid X for horizontal positioning
+      const cx = themeNodes.reduce((sum, n) => sum + n.x, 0) / themeNodes.length
+
+      // Find the topmost node (minimum Y value) in the cluster
+      const minY = Math.min(...themeNodes.map(n => n.y))
+
+      // Get the largest node radius in the cluster to account for node sizes
+      const maxNodeRadius = Math.max(...themeNodes.map(n => 4 + n.importance * 6))
+
+      // Position label above the topmost node with padding
+      // Add 40px padding plus the hull expansion (30px) plus max node radius
+      const labelY = minY - maxNodeRadius - 30 - 40
+
+      // Position above the cluster's topmost point
+      d3.select(this).attr('transform', `translate(${cx}, ${labelY})`)
+    })
+  }
+}
+
+// Laser animation loop
+function animateLasers() {
+  const speed = 0.02
+
+  laserBeams.forEach(beam => {
+    if (beam.nodePath.length < 2) return
+
+    // Get current and next node in the path
+    const currentIdx = beam.currentNodeIndex
+    const nextIdx = (currentIdx + 1) % beam.nodePath.length
+
+    // Update fromNode and toNode to reference the actual node objects (with current positions)
+    beam.fromNode = nodes.value.find(n => n.id === beam.nodePath[currentIdx].id) || beam.nodePath[currentIdx]
+    beam.toNode = nodes.value.find(n => n.id === beam.nodePath[nextIdx].id) || beam.nodePath[nextIdx]
+
+    // Advance progress
+    beam.progress += speed
+    if (beam.progress >= 1) {
+      beam.progress = 0
+      // Move to next pair of nodes
+      beam.currentNodeIndex = nextIdx
+    }
+  })
+
+  // Update laser positions
+  laserElements?.each(function(d) {
+    if (!d.fromNode || !d.toNode) return
+
+    const x1 = d.fromNode.x
+    const y1 = d.fromNode.y
+    const x2 = d.toNode.x
+    const y2 = d.toNode.y
+
+    // Calculate beam position (small segment along the path)
+    const beamLength = 20
+    const currentX = x1 + (x2 - x1) * d.progress
+    const currentY = y1 + (y2 - y1) * d.progress
+
+    // Direction vector
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const len = Math.sqrt(dx * dx + dy * dy)
+    if (len === 0) return
+
+    const nx = dx / len * beamLength / 2
+    const ny = dy / len * beamLength / 2
+
+    d3.select(this)
+      .attr('x1', currentX - nx)
+      .attr('y1', currentY - ny)
+      .attr('x2', currentX + nx)
+      .attr('y2', currentY + ny)
+  })
+
+  animationFrame = requestAnimationFrame(animateLasers)
 }
 
 function dragStarted(event: d3.D3DragEvent<SVGCircleElement, GraphNode, GraphNode>) {
@@ -298,10 +540,11 @@ function handleResize() {
     .attr('height', height)
 }
 
-// Watch for theme changes to update colors
+// Watch for dark mode theme changes to update colors
 watch(() => document.documentElement.classList.contains('dark'), () => {
   if (nodeElements) {
-    nodeElements.attr('fill', d => getNodeColor(d))
+    // Nodes use gradient fills, which are already theme-colored
+    nodeElements.attr('fill', d => `url(#node-grad-${d.themeId})`)
   }
 })
 
@@ -409,6 +652,11 @@ function generateMockData() {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   simulation?.stop()
+  // Cancel laser animation
+  if (animationFrame) {
+    cancelAnimationFrame(animationFrame)
+    animationFrame = null
+  }
 })
 </script>
 
