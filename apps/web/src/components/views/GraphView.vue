@@ -108,14 +108,14 @@ function initScene() {
 
   // Camera
   camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000)
-  camera.position.set(0, 0, 120)
+  camera.position.set(0, 0, 240)
 
   // Controls
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.05
   controls.minDistance = 20
-  controls.maxDistance = 300
+  controls.maxDistance = 500
   controls.autoRotate = true
   controls.autoRotateSpeed = 0.3
 
@@ -501,7 +501,7 @@ function focusOnTheme(themeId: string) {
 
 function resetView() {
   const startPos = camera.position.clone()
-  const endPos = new THREE.Vector3(0, 0, 120)
+  const endPos = new THREE.Vector3(0, 0, 240)
   const startTarget = controls.target.clone()
   const endTarget = new THREE.Vector3(0, 0, 0)
   let t = 0
