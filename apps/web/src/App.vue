@@ -70,7 +70,7 @@ const handleKeydown = (e: KeyboardEvent) => {
     commandPaletteOpen.value = false
   }
 
-  const routes: Record<string, string> = { '1': '/', '2': '/graph', '3': '/timeline' }
+  const routes: Record<string, string> = { '1': '/', '2': '/graph', '3': '/timeline', '4': '/chat' }
   if (routes[e.key] && !captureOpen.value && !askOpen.value && !commandPaletteOpen.value) {
     router.push(routes[e.key])
   }
@@ -83,6 +83,7 @@ const views = [
   { path: '/', label: 'Feed' },
   { path: '/graph', label: 'Graph' },
   { path: '/timeline', label: 'Timeline' },
+  { path: '/chat', label: 'Chat' },
 ]
 </script>
 

@@ -73,6 +73,44 @@ export interface SearchResponse {
   processingTime: number
 }
 
+export interface ConversationSummary {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  status: 'active' | 'archived'
+}
+
+export interface ConversationMessage {
+  id: string
+  conversationId: string
+  role: 'user' | 'assistant'
+  content: string
+  citations?: Citation[]
+  confidence?: number
+  createdAt: string
+}
+
+export interface ConversationDetail {
+  conversation: ConversationSummary
+  messages: ConversationMessage[]
+  cursor?: string
+  hasMore: boolean
+}
+
+export interface ListConversationsResponse {
+  conversations: ConversationSummary[]
+  cursor?: string
+  hasMore: boolean
+}
+
+export interface SendMessageResponse {
+  userMessage: ConversationMessage
+  assistantMessage: ConversationMessage
+  processingTime: number
+}
+
 export interface GraphData {
   themes: GraphTheme[]
   nodes: GraphNode[]
