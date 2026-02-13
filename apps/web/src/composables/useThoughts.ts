@@ -45,7 +45,14 @@ export function useThoughts() {
 
   const createThought = async (content: string, type?: string, tags?: string[]) => {
     try {
-      const thought = await thoughtsApi.create(content, type, tags)
+      const response = await thoughtsApi.create(content, type, tags)
+      const thought: Thought = {
+        id: response.id,
+        text: content,
+        type: (type as Thought['type']) || 'thought',
+        tags: tags || [],
+        createdAt: response.createdAt,
+      }
       thoughts.value.unshift(thought)
       return thought
     } catch (e) {

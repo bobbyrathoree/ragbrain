@@ -22,6 +22,8 @@ const thoughtsByDate = computed(() => {
   const grouped: Record<string, Array<{ id: string; text: string; type: string; time: string }>> = {}
 
   for (const thought of thoughts.value) {
+    if (!thought.createdAt || !thought.text) continue
+
     const date = thought.createdAt.split('T')[0] // YYYY-MM-DD
     const time = new Date(thought.createdAt).toLocaleTimeString('en-US', {
       hour: 'numeric',
@@ -104,6 +106,27 @@ const selectDate = (date: string) => {
   if (!date) return
   selectedDate.value = selectedDate.value === date ? null : date
 }
+
+const totalThoughts = computed(() => thoughts.value.length)
+
+const activeDays = computed(() => Object.keys(thoughtsByDate.value).length)
+
+const currentStreak = computed(() => {
+  let streak = 0
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+
+  while (true) {
+    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    if (thoughtsByDate.value[dateStr]?.length) {
+      streak++
+      date.setDate(date.getDate() - 1)
+    } else {
+      break
+    }
+  }
+  return streak
+})
 </script>
 
 <template>
@@ -163,15 +186,15 @@ const selectDate = (date: string) => {
         <!-- Stats -->
         <div class="grid grid-cols-3 gap-3 mt-8">
           <div class="text-center p-3 bg-bg-tertiary/50 rounded-lg">
-            <div class="text-xl font-semibold text-text-primary">127</div>
+            <div class="text-xl font-semibold text-text-primary">{{ totalThoughts }}</div>
             <div class="text-[10px] text-text-tertiary mt-0.5">Total</div>
           </div>
           <div class="text-center p-3 bg-bg-tertiary/50 rounded-lg">
-            <div class="text-xl font-semibold text-text-primary">23</div>
+            <div class="text-xl font-semibold text-text-primary">{{ activeDays }}</div>
             <div class="text-[10px] text-text-tertiary mt-0.5">Days</div>
           </div>
           <div class="text-center p-3 bg-bg-tertiary/50 rounded-lg">
-            <div class="text-xl font-semibold text-text-primary">12</div>
+            <div class="text-xl font-semibold text-text-primary">{{ currentStreak }}</div>
             <div class="text-[10px] text-text-tertiary mt-0.5">Streak</div>
           </div>
         </div>

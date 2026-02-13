@@ -44,9 +44,11 @@ let observer: IntersectionObserver | null = null
 
 // Filter and sort thoughts (no mock fallback)
 const displayThoughts = computed(() => {
+  const valid = thoughts.value.filter((t) => t.text && t.createdAt)
+
   let filtered = filterType.value === 'all'
-    ? thoughts.value
-    : thoughts.value.filter((t) => t.type === filterType.value)
+    ? valid
+    : valid.filter((t) => t.type === filterType.value)
 
   return filtered.sort((a, b) => {
     const dateA = new Date(a.createdAt).getTime()

@@ -144,6 +144,12 @@ Desktop.ini
 *.tar.gz
 *.rar
 
+# Playwright MCP
+.playwright-mcp/
+
+# Screenshots
+*.png
+
 # Keep these
 !.gitkeep
 !.github/
