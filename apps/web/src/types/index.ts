@@ -57,6 +57,22 @@ export interface GraphTheme {
   sampleThoughts: { id: string; text: string }[]
 }
 
+export interface SearchResult {
+  id: string
+  text: string
+  type: string
+  tags: string[]
+  score: number
+  highlight?: string
+  createdAt: string
+}
+
+export interface SearchResponse {
+  results: SearchResult[]
+  totalCount: number
+  processingTime: number
+}
+
 export interface GraphData {
   themes: GraphTheme[]
   nodes: GraphNode[]

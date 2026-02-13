@@ -62,6 +62,7 @@ const apiStack = new ApiStack(app, `${project}-api-${env}`, {
   graphLambda: computeStack.graphLambda,
   conversationsLambda: computeStack.conversationsLambda,
   exportLambda: computeStack.exportLambda,
+  searchLambda: computeStack.searchLambda,
   apiKeySecret: storageStack.apiKeySecret,
   thoughtsTable: storageStack.thoughtsTable,
 });

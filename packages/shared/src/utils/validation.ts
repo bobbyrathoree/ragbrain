@@ -20,21 +20,44 @@ export function validateThoughtType(type: string): boolean {
 }
 
 export function detectThoughtType(text: string): ThoughtType {
-  if (text.includes('```')) {
+  const lowerText = text.toLowerCase();
+
+  // Code detection - fences or common syntax patterns
+  if (
+    text.includes('```') ||
+    text.includes('const ') ||
+    text.includes('function ') ||
+    text.includes('import ') ||
+    text.includes('export ') ||
+    text.includes('=>') ||
+    /^(const|let|var|function|class|interface|type)\s/.test(text)
+  ) {
     return ThoughtType.CODE;
   }
-  if (text.match(/https?:\/\//)) {
+
+  // Link detection
+  if (/https?:\/\//.test(text)) {
     return ThoughtType.LINK;
   }
-  if (text.includes('!todo')) {
+
+  // Todo detection - explicit flag or word-boundary match
+  if (text.includes('!todo') || /\btodo\b/i.test(text) || text.includes('[ ]')) {
     return ThoughtType.TODO;
   }
-  if (text.includes('!decision')) {
+
+  // Decision detection - explicit flag or strong decision-intent keywords
+  const hasDecisionFlag = text.includes('!decision');
+  const hasDecisionIntent = /\b(decided|decision|chose|choosing|going with|opted for|picked|settled on)\b/i.test(lowerText);
+  const hasComparison = /\b(vs\.?|versus|compared to|instead of|rather than)\b/i.test(lowerText);
+  if (hasDecisionFlag || hasDecisionIntent || (hasComparison && /\b(going with|chose|decided|picked|choosing|opted|selected)\b/i.test(lowerText))) {
     return ThoughtType.DECISION;
   }
-  if (text.includes('!rationale') || text.includes('because')) {
+
+  // Rationale detection - explicit flag only ("because" alone is far too broad)
+  if (text.includes('!rationale')) {
     return ThoughtType.RATIONALE;
   }
+
   return ThoughtType.NOTE;
 }
 

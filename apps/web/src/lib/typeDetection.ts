@@ -3,7 +3,7 @@ import type { ThoughtType } from '@/types'
 export function detectType(content: string): ThoughtType {
   const text = content.toLowerCase()
 
-  // Code detection
+  // Code detection - check for code fences, common syntax patterns
   if (
     content.includes('```') ||
     content.includes('const ') ||
@@ -16,7 +16,7 @@ export function detectType(content: string): ThoughtType {
     return 'code'
   }
 
-  // Link detection
+  // Link detection - URLs at the start or www references
   if (
     text.startsWith('http://') ||
     text.startsWith('https://') ||
@@ -25,38 +25,34 @@ export function detectType(content: string): ThoughtType {
     return 'link'
   }
 
-  // Todo detection
+  // Todo detection - explicit markers and strong action phrases
   if (
-    text.includes('todo:') ||
+    /\btodo\b/.test(text) ||
     text.includes('[ ]') ||
     text.includes('- [ ]') ||
-    text.startsWith('remember to') ||
-    text.startsWith('need to') ||
-    text.startsWith('don\'t forget')
+    text.startsWith('remember to ') ||
+    text.startsWith('don\'t forget to ')
   ) {
     return 'todo'
   }
 
-  // Decision detection
-  if (
-    text.includes('decided') ||
-    text.includes('decision') ||
-    text.includes('chose') ||
-    text.includes('going with') ||
-    text.includes('vs') ||
-    text.includes(' or ')
-  ) {
+  // Decision detection - require strong decision-intent keywords
+  // "or" and "vs" alone are far too broad (match casual sentences)
+  const hasDecisionIntent = /\b(decided|decision|chose|choosing|going with|opted for|picked|settled on)\b/.test(text)
+  const hasComparison = /\b(vs\.?|versus|compared to|instead of|rather than|over)\b/.test(text)
+  if (hasDecisionIntent || (hasComparison && /\b(going with|chose|decided|picked|choosing|opted|selected)\b/.test(text))) {
     return 'decision'
   }
 
-  // Insight detection
+  // Insight detection - learning and realization keywords
   if (
-    text.includes('realized') ||
-    text.includes('insight') ||
-    text.includes('learned') ||
-    text.includes('interesting') ||
-    text.includes('key takeaway') ||
-    text.includes('the key')
+    /\brealized\b/.test(text) ||
+    /\binsight\b/.test(text) ||
+    /\blearned\b/.test(text) ||
+    /\bkey takeaway\b/.test(text) ||
+    /\bturns out\b/.test(text) ||
+    /\bdiscovered that\b/.test(text) ||
+    /\btil\b/.test(text)
   ) {
     return 'insight'
   }

@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { detectType } from '@/lib/typeDetection'
 import { extractTags } from '@/lib/tagExtraction'
 import { useThoughts } from '@/composables/useThoughts'
@@ -95,7 +96,7 @@ const commandInputRef = ref<HTMLInputElement | null>(null)
 // Formatted markdown answer
 const formattedAnswer = computed(() => {
   if (!askResponse.value?.answer) return ''
-  return marked.parse(askResponse.value.answer) as string
+  return DOMPurify.sanitize(marked.parse(askResponse.value.answer) as string)
 })
 
 // Settings state (localStorage overrides env vars)

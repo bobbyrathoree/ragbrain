@@ -31,6 +31,7 @@ export class ComputeStack extends cdk.Stack {
   public readonly graphLambda: lambda.Function;
   public readonly conversationsLambda: lambda.Function;
   public readonly exportLambda: lambda.Function;
+  public readonly searchLambda: lambda.Function;
   public readonly sharedLayer: lambda.LayerVersion;
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
@@ -334,6 +335,31 @@ export class ComputeStack extends cdk.Stack {
     // Grant permissions for Export Lambda
     thoughtsTable.grantReadData(this.exportLambda);
     encryptionKey.grantDecrypt(this.exportLambda); // For decrypting conversation messages
+
+    // Search Lambda - lightweight BM25 text search (no embeddings, no LLM)
+    this.searchLambda = new lambdaNodejs.NodejsFunction(this, 'SearchLambda', {
+      functionName: `${projectName}-search-${environment}`,
+      entry: path.join(__dirname, '../../functions/search/index.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      environment: commonEnv,
+      layers: [this.sharedLayer],
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: bundlingOptions,
+    });
+
+    // Search Lambda only needs OpenSearch access (no Bedrock, no DynamoDB writes)
+    this.searchLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['aoss:APIAccessAll'],
+        resources: [
+          `arn:aws:aoss:${this.region}:${this.account}:collection/${searchCollection.attrId}`,
+        ],
+      })
+    );
 
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'CaptureLambdaArn', {

@@ -20,6 +20,7 @@ interface ApiStackProps extends cdk.StackProps {
   graphLambda: lambda.Function;
   conversationsLambda: lambda.Function;
   exportLambda: lambda.Function;
+  searchLambda: lambda.Function;
   apiKeySecret: secretsmanager.ISecret;
   thoughtsTable: dynamodb.ITable;
   // Note: sharedLayer removed - created locally to avoid cross-stack export issues
@@ -41,6 +42,7 @@ export class ApiStack extends cdk.Stack {
       graphLambda,
       conversationsLambda,
       exportLambda,
+      searchLambda,
       apiKeySecret,
       thoughtsTable,
     } = props;
@@ -256,6 +258,17 @@ export class ApiStack extends cdk.Stack {
       integration: new apigatewayIntegrations.HttpLambdaIntegration(
         'ConversationMessagesIntegration',
         conversationsLambda
+      ),
+      authorizer,
+    });
+
+    // GET /search - Lightweight BM25 text search
+    this.api.addRoutes({
+      path: '/search',
+      methods: [apigateway.HttpMethod.GET],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'SearchIntegration',
+        searchLambda
       ),
       authorizer,
     });

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useThoughts } from '@/composables/useThoughts'
+import { useSearch } from '@/composables/useSearch'
 import type { Thought, ThoughtType } from '@/types'
 
 const MAX_LENGTH = 280
@@ -13,6 +14,43 @@ const {
   fetchThoughts,
   fetchMoreThoughts
 } = useThoughts()
+
+const {
+  searchQuery,
+  searchResults,
+  isSearching,
+  totalCount: searchTotalCount,
+  processingTime: searchProcessingTime,
+  search,
+  clearSearch,
+} = useSearch()
+
+// Local search input (synced on Enter/submit)
+const searchInput = ref('')
+const searchInputRef = ref<HTMLInputElement | null>(null)
+
+const isSearchActive = computed(() => searchQuery.value.length > 0)
+
+const handleSearch = () => {
+  const q = searchInput.value.trim()
+  if (q) {
+    search(q)
+  } else {
+    clearSearch()
+  }
+}
+
+const handleClearSearch = () => {
+  searchInput.value = ''
+  clearSearch()
+}
+
+const handleSearchKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') {
+    handleClearSearch()
+    searchInputRef.value?.blur()
+  }
+}
 
 // Filtering
 const filterType = ref<ThoughtType | 'all'>('all')
@@ -128,34 +166,121 @@ onUnmounted(() => {
 
 <template>
   <div class="max-w-5xl mx-auto px-4 sm:px-6">
-    <!-- Filters -->
-    <div class="flex items-center gap-4 mb-8">
-      <div class="flex gap-1 flex-wrap">
+    <!-- Search + Filters -->
+    <div class="space-y-4 mb-8">
+      <!-- Search bar -->
+      <div class="relative">
+        <div class="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+        <input
+          ref="searchInputRef"
+          v-model="searchInput"
+          type="text"
+          placeholder="Search thoughts..."
+          class="w-full pl-10 pr-10 py-2.5 bg-bg-elevated border border-border-secondary rounded-xl text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-primary transition-colors"
+          @keydown.enter="handleSearch"
+          @keydown="handleSearchKeydown"
+        />
         <button
-          v-for="f in typeFilters"
-          :key="f.value"
-          @click="filterType = f.value"
-          :class="[
-            'px-3 py-1 text-xs rounded-full transition-colors',
-            filterType === f.value
-              ? 'bg-text-primary text-bg-primary'
-              : 'text-text-tertiary hover:text-text-secondary'
-          ]"
+          v-if="searchInput"
+          @click="handleClearSearch"
+          class="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
         >
-          {{ f.label }}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
-      <div class="flex-1" />
-      <button
-        @click="sortOrder = sortOrder === 'newest' ? 'oldest' : 'newest'"
-        class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+
+      <!-- Search results header -->
+      <div v-if="isSearchActive" class="flex items-center gap-3">
+        <span class="text-xs text-text-tertiary">
+          {{ searchTotalCount }} result{{ searchTotalCount !== 1 ? 's' : '' }} for "<span class="text-text-primary">{{ searchQuery }}</span>"
+        </span>
+        <span class="text-xs text-text-tertiary">·</span>
+        <span class="text-xs text-text-tertiary">{{ searchProcessingTime }}ms</span>
+        <div class="flex-1" />
+        <button
+          @click="handleClearSearch"
+          class="text-xs text-text-tertiary hover:text-text-primary transition-colors"
+        >
+          Clear search
+        </button>
+      </div>
+
+      <!-- Filters (hidden during search) -->
+      <div v-if="!isSearchActive" class="flex items-center gap-4">
+        <div class="flex gap-1 flex-wrap">
+          <button
+            v-for="f in typeFilters"
+            :key="f.value"
+            @click="filterType = f.value"
+            :class="[
+              'px-3 py-1 text-xs rounded-full transition-colors',
+              filterType === f.value
+                ? 'bg-text-primary text-bg-primary'
+                : 'text-text-tertiary hover:text-text-secondary'
+            ]"
+          >
+            {{ f.label }}
+          </button>
+        </div>
+        <div class="flex-1" />
+        <button
+          @click="sortOrder = sortOrder === 'newest' ? 'oldest' : 'newest'"
+          class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+        >
+          {{ sortOrder === 'newest' ? '↓ Newest' : '↑ Oldest' }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Search loading -->
+    <div v-if="isSearching" class="text-center py-16">
+      <div class="text-text-tertiary text-sm">Searching...</div>
+    </div>
+
+    <!-- Search results -->
+    <div v-else-if="isSearchActive" class="columns-1 sm:columns-2 lg:columns-3 gap-5 space-y-5">
+      <article
+        v-for="result in searchResults"
+        :key="result.id"
+        class="break-inside-avoid relative bg-bg-elevated border-2 border-border-primary rounded-xl shadow-brutal-sm hover:shadow-brutal-lg transition-all duration-200 ease-out hover:-translate-y-1 hover:-translate-x-0.5 group"
       >
-        {{ sortOrder === 'newest' ? '↓ Newest' : '↑ Oldest' }}
-      </button>
+        <div class="flex">
+          <div :class="['w-1 rounded-full flex-shrink-0 my-4 ml-3', typeAccent[result.type] || 'bg-stone-400']" />
+          <div class="flex-1 p-4 pl-3">
+            <p
+              v-if="result.highlight"
+              class="text-[15px] leading-relaxed text-text-primary"
+              v-html="result.highlight"
+            />
+            <p v-else class="text-[15px] leading-relaxed text-text-primary">
+              {{ truncate(result.text) }}
+            </p>
+
+            <div class="flex items-center gap-2 mt-3 text-[11px]">
+              <span :class="['uppercase tracking-wider font-semibold', typeLabelColor[result.type] || 'text-stone-400']">{{ result.type }}</span>
+              <span class="text-text-tertiary">·</span>
+              <span class="text-text-tertiary">{{ formatTime(result.createdAt) }}</span>
+              <span class="text-text-tertiary">·</span>
+              <span class="text-text-tertiary">{{ result.score.toFixed(1) }}</span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <!-- Search empty state -->
+    <div v-else-if="isSearchActive && searchResults.length === 0 && !isSearching" class="text-center py-16">
+      <p class="text-text-tertiary text-sm">No results found for "{{ searchQuery }}"</p>
     </div>
 
     <!-- Initial Loading -->
-    <div v-if="isLoading" class="text-center py-16">
+    <div v-else-if="isLoading" class="text-center py-16">
       <div class="text-text-tertiary text-sm">Loading thoughts...</div>
     </div>
 
