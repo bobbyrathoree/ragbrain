@@ -79,9 +79,19 @@ watch(commandQuery, () => {
 
 // Capture state
 const captureContent = ref('')
-const captureType = computed<ThoughtType>(() => detectType(captureContent.value))
+const captureTypeOverride = ref<ThoughtType | null>(null)
+const detectedType = computed<ThoughtType>(() => detectType(captureContent.value))
+const captureType = computed<ThoughtType>(() => captureTypeOverride.value || detectedType.value)
 const captureTags = computed(() => extractTags(captureContent.value))
 const isSaving = ref(false)
+const typeDropdownOpen = ref(false)
+
+const allTypes: ThoughtType[] = ['thought', 'decision', 'insight', 'code', 'todo', 'link']
+
+const setCaptureType = (type: ThoughtType) => {
+  captureTypeOverride.value = type === detectedType.value ? null : type
+  typeDropdownOpen.value = false
+}
 
 // Ask state
 const askQuery = ref('')
@@ -170,6 +180,8 @@ watch(captureOpen, (open) => {
     nextTick(() => captureTextareaRef.value?.focus())
   } else {
     captureContent.value = ''
+    captureTypeOverride.value = null
+    typeDropdownOpen.value = false
   }
 })
 
@@ -320,10 +332,38 @@ const timeWindows = [
         <div v-if="captureOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="captureOpen = false" />
           <div class="relative w-full max-w-2xl bg-bg-elevated border border-border-primary rounded-2xl shadow-2xl overflow-hidden">
-            <!-- Type indicator -->
+            <!-- Type indicator (clickable to override) -->
             <div class="flex items-center gap-3 px-6 pt-5 pb-3">
-              <div :class="['w-2 h-2 rounded-full', typeAccent[captureType]]" />
-              <span class="text-xs text-text-tertiary uppercase tracking-wider">{{ captureType }}</span>
+              <div class="relative">
+                <button
+                  @click="typeDropdownOpen = !typeDropdownOpen"
+                  class="flex items-center gap-2 px-2 py-1 -ml-2 rounded-lg hover:bg-bg-tertiary transition-colors"
+                >
+                  <div :class="['w-2 h-2 rounded-full', typeAccent[captureType]]" />
+                  <span class="text-xs text-text-tertiary uppercase tracking-wider">{{ captureType }}</span>
+                  <svg class="w-3 h-3 text-text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                <div
+                  v-if="typeDropdownOpen"
+                  class="absolute top-full left-0 mt-1 w-36 bg-bg-elevated border border-border-secondary rounded-lg shadow-lg overflow-hidden z-10"
+                >
+                  <button
+                    v-for="t in allTypes"
+                    :key="t"
+                    @click="setCaptureType(t)"
+                    :class="[
+                      'w-full flex items-center gap-2 px-3 py-2 text-left text-xs transition-colors',
+                      captureType === t ? 'bg-bg-tertiary text-text-primary' : 'text-text-secondary hover:bg-bg-tertiary hover:text-text-primary'
+                    ]"
+                  >
+                    <div :class="['w-2 h-2 rounded-full', typeAccent[t]]" />
+                    <span class="uppercase tracking-wider">{{ t }}</span>
+                    <span v-if="t === detectedType && !captureTypeOverride" class="ml-auto text-[10px] text-text-tertiary">auto</span>
+                  </button>
+                </div>
+              </div>
               <div class="flex-1" />
               <div v-if="captureTags.length" class="flex gap-2">
                 <span v-for="tag in captureTags" :key="tag" class="text-xs text-text-tertiary">#{{ tag }}</span>
