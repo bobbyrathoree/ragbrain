@@ -1,14 +1,41 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useThoughts } from '@/composables/useThoughts'
+import { useTimelineAnalytics } from '@/composables/useTimelineAnalytics'
 
-const { thoughts, fetchThoughts } = useThoughts()
+const { thoughts, isLoading, fetchThoughts } = useThoughts()
+const timeRange = ref<string>('all')
 
-const currentMonth = ref(new Date())
-const selectedDate = ref<string | null>(null)
+const {
+  weeklyVelocity,
+  velocityTrend,
+  thisWeekCount,
+  currentStreak,
+  mostActiveDay,
+  topType,
+  tagTrends,
+  decisions,
+  openTodos,
+  thoughtsByDate,
+} = useTimelineAnalytics(thoughts, timeRange)
 
-// Type colors
-const typeColors: Record<string, string> = {
+const timeRanges = [
+  { value: '1w', label: '1W' },
+  { value: '1m', label: '1M' },
+  { value: '3m', label: '3M' },
+  { value: 'all', label: 'All' },
+]
+
+const typeLabelColors: Record<string, string> = {
+  thought: 'text-stone-400',
+  decision: 'text-violet-400',
+  insight: 'text-sky-400',
+  code: 'text-emerald-400',
+  todo: 'text-amber-400',
+  link: 'text-rose-400',
+}
+
+const typeAccentBg: Record<string, string> = {
   thought: 'bg-stone-400',
   decision: 'bg-violet-500',
   insight: 'bg-sky-500',
@@ -17,245 +44,251 @@ const typeColors: Record<string, string> = {
   link: 'bg-rose-400',
 }
 
-// Group thoughts by date from API data
-const thoughtsByDate = computed(() => {
-  const grouped: Record<string, Array<{ id: string; text: string; type: string; time: string }>> = {}
-
-  for (const thought of thoughts.value) {
-    if (!thought.createdAt || !thought.text) continue
-
-    const date = thought.createdAt.split('T')[0] // YYYY-MM-DD
-    const time = new Date(thought.createdAt).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    })
-
-    if (!grouped[date]) grouped[date] = []
-    grouped[date].push({
-      id: thought.id,
-      text: thought.text,
-      type: thought.type,
-      time
-    })
-  }
-
-  return grouped
-})
-
-onMounted(() => fetchThoughts())
-
-const monthName = computed(() => {
-  return currentMonth.value.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-})
-
-const heatmapData = computed(() => {
-  const year = currentMonth.value.getFullYear()
-  const month = currentMonth.value.getMonth()
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const firstDay = new Date(year, month, 1).getDay()
-
-  const days: Array<{ date: string; count: number }> = []
-
-  for (let i = 0; i < firstDay; i++) {
-    days.push({ date: '', count: 0 })
-  }
-
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    const dayThoughts = thoughtsByDate.value[dateStr] || []
-    days.push({ date: dateStr, count: dayThoughts.length })
-  }
-
-  return days
-})
-
-const selectedDateThoughts = computed(() => {
-  if (!selectedDate.value) return []
-  return thoughtsByDate.value[selectedDate.value] || []
-})
-
-const formatSelectedDate = computed(() => {
-  if (!selectedDate.value) return ''
-  return new Date(selectedDate.value).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
+// Sparkline SVG path from velocity data
+const sparklinePath = computed(() => {
+  const data = weeklyVelocity.value
+  if (data.length < 2) return ''
+  const max = Math.max(...data.map(d => d.count), 1)
+  const w = 80, h = 24
+  const points = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * w
+    const y = h - (d.count / max) * h
+    return `${x},${y}`
   })
+  return `M${points.join('L')}`
 })
 
-const getOpacity = (count: number) => {
-  if (count === 0) return 'opacity-[0.08]'
-  if (count < 2) return 'opacity-25'
-  if (count < 4) return 'opacity-50'
-  if (count < 6) return 'opacity-75'
-  return 'opacity-100'
+const formatDate = (dateStr: string) => {
+  const d = new Date(dateStr + 'T00:00:00')
+  const now = new Date()
+  const today = now.toISOString().split('T')[0]
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0]
+  if (dateStr === today) return 'Today'
+  if (dateStr === yesterday) return 'Yesterday'
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 }
 
-const prevMonth = () => {
-  currentMonth.value = new Date(currentMonth.value.getFullYear(), currentMonth.value.getMonth() - 1)
-  selectedDate.value = null
+const formatTime = (date: string) => {
+  return new Date(date).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
-const nextMonth = () => {
-  currentMonth.value = new Date(currentMonth.value.getFullYear(), currentMonth.value.getMonth() + 1)
-  selectedDate.value = null
+const todoAge = (date: string) => {
+  const days = Math.floor((Date.now() - new Date(date).getTime()) / 86400000)
+  if (days === 0) return 'today'
+  if (days === 1) return '1d ago'
+  if (days < 7) return `${days}d ago`
+  if (days < 30) return `${Math.floor(days / 7)}w ago`
+  return `${Math.floor(days / 30)}mo ago`
 }
 
-const selectDate = (date: string) => {
-  if (!date) return
-  selectedDate.value = selectedDate.value === date ? null : date
+const todoAgeClass = (date: string) => {
+  const days = Math.floor((Date.now() - new Date(date).getTime()) / 86400000)
+  if (days > 30) return 'border-l-2 border-rose-500/50'
+  if (days > 7) return 'border-l-2 border-amber-500/50'
+  return ''
 }
 
-const totalThoughts = computed(() => thoughts.value.length)
-
-const activeDays = computed(() => Object.keys(thoughtsByDate.value).length)
-
-const currentStreak = computed(() => {
-  let streak = 0
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-
-  while (true) {
-    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-    if (thoughtsByDate.value[dateStr]?.length) {
-      streak++
-      date.setDate(date.getDate() - 1)
-    } else {
-      break
-    }
-  }
-  return streak
+onMounted(() => {
+  fetchThoughts(200)
 })
 </script>
 
 <template>
   <div class="max-w-4xl mx-auto px-4 sm:px-6 pt-20 pb-24">
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
-      <!-- Heatmap -->
-      <div>
-        <!-- Month navigation -->
-        <div class="flex items-center justify-between mb-6">
-          <button @click="prevMonth" class="p-2 text-text-tertiary hover:text-text-primary transition-colors">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <h2 class="text-base font-medium text-text-primary">{{ monthName }}</h2>
-          <button @click="nextMonth" class="p-2 text-text-tertiary hover:text-text-primary transition-colors">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        </div>
+    <!-- Loading -->
+    <div v-if="isLoading" class="text-center py-16">
+      <div class="text-text-tertiary text-sm">Loading brain pulse...</div>
+    </div>
 
-        <!-- Day labels -->
-        <div class="grid grid-cols-7 gap-1.5 mb-1.5">
-          <div v-for="day in ['S', 'M', 'T', 'W', 'T', 'F', 'S']" :key="day" class="text-center text-[10px] text-text-tertiary py-1">
-            {{ day }}
-          </div>
-        </div>
-
-        <!-- Heatmap grid -->
-        <div class="grid grid-cols-7 gap-1.5">
+    <template v-else>
+      <!-- Time Range Selector -->
+      <div class="flex justify-center mb-8">
+        <div class="flex items-center gap-1 px-2 py-1.5 bg-bg-elevated/80 backdrop-blur-xl border border-border-secondary rounded-full">
           <button
-            v-for="(day, index) in heatmapData"
-            :key="index"
+            v-for="tr in timeRanges"
+            :key="tr.value"
+            @click="timeRange = tr.value"
             :class="[
-              'aspect-square rounded-md transition-all',
-              day.date ? 'cursor-pointer hover:ring-1 hover:ring-text-primary/30' : 'cursor-default',
-              day.date === selectedDate ? 'ring-2 ring-text-primary' : '',
-              day.date ? `bg-text-primary ${getOpacity(day.count)}` : 'bg-transparent'
+              'px-3 py-1 text-xs font-medium rounded-full transition-all',
+              timeRange === tr.value
+                ? 'bg-text-primary text-bg-primary'
+                : 'text-text-tertiary hover:text-text-secondary'
             ]"
-            :disabled="!day.date"
-            @click="selectDate(day.date)"
-          />
-        </div>
-
-        <!-- Legend -->
-        <div class="flex items-center justify-end gap-1.5 mt-4 text-[10px] text-text-tertiary">
-          <span>Less</span>
-          <div class="w-2.5 h-2.5 rounded-sm bg-text-primary opacity-[0.08]" />
-          <div class="w-2.5 h-2.5 rounded-sm bg-text-primary opacity-25" />
-          <div class="w-2.5 h-2.5 rounded-sm bg-text-primary opacity-50" />
-          <div class="w-2.5 h-2.5 rounded-sm bg-text-primary opacity-75" />
-          <div class="w-2.5 h-2.5 rounded-sm bg-text-primary" />
-          <span>More</span>
-        </div>
-
-        <!-- Stats -->
-        <div class="grid grid-cols-3 gap-3 mt-8">
-          <div class="text-center p-3 bg-bg-tertiary/50 rounded-lg">
-            <div class="text-xl font-semibold text-text-primary">{{ totalThoughts }}</div>
-            <div class="text-[10px] text-text-tertiary mt-0.5">Total</div>
-          </div>
-          <div class="text-center p-3 bg-bg-tertiary/50 rounded-lg">
-            <div class="text-xl font-semibold text-text-primary">{{ activeDays }}</div>
-            <div class="text-[10px] text-text-tertiary mt-0.5">Days</div>
-          </div>
-          <div class="text-center p-3 bg-bg-tertiary/50 rounded-lg">
-            <div class="text-xl font-semibold text-text-primary">{{ currentStreak }}</div>
-            <div class="text-[10px] text-text-tertiary mt-0.5">Streak</div>
-          </div>
+          >
+            {{ tr.label }}
+          </button>
         </div>
       </div>
 
-      <!-- Thought stream -->
-      <div>
-        <Transition name="slide" mode="out-in">
-          <div v-if="selectedDate" :key="selectedDate">
-            <h3 class="text-sm font-medium text-text-primary mb-1">{{ formatSelectedDate }}</h3>
-            <p class="text-xs text-text-tertiary mb-4">{{ selectedDateThoughts.length }} thoughts</p>
+      <!-- Section 1: Pulse Header -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <!-- Velocity -->
+        <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-4">
+          <div class="text-xs text-text-tertiary uppercase tracking-wider mb-2">Velocity</div>
+          <div class="flex items-end gap-3">
+            <span class="text-2xl font-bold text-text-primary">{{ thisWeekCount }}</span>
+            <span class="text-xs text-text-tertiary mb-1">/week</span>
+            <span :class="[
+              'text-xs mb-1 font-medium',
+              velocityTrend === 'up' ? 'text-emerald-400' : velocityTrend === 'down' ? 'text-rose-400' : 'text-text-tertiary'
+            ]">
+              {{ velocityTrend === 'up' ? '↑' : velocityTrend === 'down' ? '↓' : '→' }}
+            </span>
+          </div>
+          <svg class="w-full h-6 mt-2" viewBox="0 0 80 24" preserveAspectRatio="none">
+            <path :d="sparklinePath" fill="none" stroke="currentColor" stroke-width="1.5" class="text-text-tertiary" />
+          </svg>
+        </div>
 
-            <div v-if="selectedDateThoughts.length" class="space-y-3">
+        <!-- Most Active Day -->
+        <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-4">
+          <div class="text-xs text-text-tertiary uppercase tracking-wider mb-2">Peak Day</div>
+          <div class="text-2xl font-bold text-text-primary">{{ mostActiveDay.day }}</div>
+          <div class="flex gap-1 mt-2">
+            <div
+              v-for="(count, i) in mostActiveDay.distribution"
+              :key="i"
+              class="flex-1 rounded-sm"
+              :style="{
+                height: Math.max(4, (count / Math.max(...mostActiveDay.distribution, 1)) * 20) + 'px',
+                backgroundColor: count === Math.max(...mostActiveDay.distribution) ? 'var(--text-primary)' : 'var(--bg-tertiary)'
+              }"
+            />
+          </div>
+        </div>
+
+        <!-- Streak -->
+        <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-4">
+          <div class="text-xs text-text-tertiary uppercase tracking-wider mb-2">Streak</div>
+          <div class="flex items-end gap-2">
+            <span class="text-2xl font-bold text-text-primary">{{ currentStreak }}</span>
+            <span class="text-xs text-text-tertiary mb-1">days</span>
+            <span class="text-lg mb-0.5" :style="{ opacity: Math.min(1, 0.3 + currentStreak * 0.15) }">🔥</span>
+          </div>
+        </div>
+
+        <!-- Top Type -->
+        <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-4">
+          <div class="text-xs text-text-tertiary uppercase tracking-wider mb-2">Top Type</div>
+          <div class="flex items-end gap-2">
+            <div :class="['w-3 h-3 rounded-full mb-1', typeAccentBg[topType.type] || 'bg-stone-400']" />
+            <span class="text-2xl font-bold text-text-primary capitalize">{{ topType.type }}</span>
+          </div>
+          <div class="text-xs text-text-tertiary mt-1">{{ topType.count }} this period</div>
+        </div>
+      </div>
+
+      <!-- Section 3: Tag Trends -->
+      <div v-if="tagTrends.length > 0" class="bg-bg-elevated border-2 border-border-primary rounded-xl p-5 mb-8">
+        <h3 class="text-xs text-text-tertiary uppercase tracking-wider mb-4">Trending Topics</h3>
+        <div class="space-y-3">
+          <div v-for="tag in tagTrends" :key="tag.tag" class="flex items-center gap-3">
+            <span class="text-xs text-text-secondary w-24 truncate font-mono">#{{ tag.tag }}</span>
+            <div class="flex-1 h-2 bg-bg-tertiary rounded-full overflow-hidden">
               <div
-                v-for="thought in selectedDateThoughts"
-                :key="thought.id"
-                class="relative pl-4 py-2 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:rounded-full"
-                :class="typeColors[thought.type] ? `before:${typeColors[thought.type]}` : 'before:bg-stone-400'"
-              >
-                <p class="text-sm text-text-primary">{{ thought.text }}</p>
-                <div class="flex items-center gap-2 mt-1 text-[10px] text-text-tertiary">
-                  <span class="uppercase tracking-wider">{{ thought.type }}</span>
-                  <span>·</span>
-                  <span>{{ thought.time }}</span>
-                </div>
+                class="h-full bg-text-primary/60 rounded-full transition-all duration-500"
+                :style="{ width: `${(tag.count / Math.max(...tagTrends.map(t => t.count), 1)) * 100}%` }"
+              />
+            </div>
+            <span class="text-xs text-text-tertiary w-6 text-right">{{ tag.count }}</span>
+            <span :class="[
+              'text-xs w-4',
+              tag.trend === 'up' ? 'text-emerald-400' : tag.trend === 'down' ? 'text-rose-400' : 'text-text-tertiary'
+            ]">
+              {{ tag.trend === 'up' ? '↑' : tag.trend === 'down' ? '↓' : '→' }}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div v-else class="bg-bg-elevated border-2 border-border-primary rounded-xl p-5 mb-8 text-center">
+        <p class="text-text-tertiary text-sm">Add #tags to your thoughts to see topic trends here.</p>
+      </div>
+
+      <!-- Section 4: Decision Log + Open TODOs -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
+        <!-- Decision Log -->
+        <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-5">
+          <h3 class="text-xs text-text-tertiary uppercase tracking-wider mb-4">Decision Log</h3>
+          <div v-if="decisions.length === 0" class="text-xs text-text-tertiary py-4 text-center">
+            No decisions captured yet
+          </div>
+          <div v-else class="space-y-0">
+            <div v-for="(d, i) in decisions.slice(0, 8)" :key="d.id" class="flex gap-3">
+              <div class="flex flex-col items-center">
+                <div class="w-2.5 h-2.5 rounded-full bg-violet-500 flex-shrink-0 mt-1.5" />
+                <div v-if="i < Math.min(decisions.length, 8) - 1" class="w-0.5 flex-1 bg-violet-500/20 my-1" />
+              </div>
+              <div class="pb-4 min-w-0">
+                <p class="text-sm text-text-primary line-clamp-2">{{ d.text }}</p>
+                <p class="text-[10px] text-text-tertiary mt-1">
+                  {{ new Date(d.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }}
+                </p>
               </div>
             </div>
+          </div>
+        </div>
 
-            <div v-else class="text-sm text-text-tertiary py-8 text-center">
-              No thoughts on this day
+        <!-- Open TODOs -->
+        <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-5">
+          <h3 class="text-xs text-text-tertiary uppercase tracking-wider mb-4">Open TODOs</h3>
+          <div v-if="openTodos.length === 0" class="text-xs text-text-tertiary py-4 text-center">
+            No open TODOs
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="todo in openTodos.slice(0, 8)"
+              :key="todo.id"
+              :class="['flex items-start gap-3 p-2 rounded-lg', todoAgeClass(todo.createdAt)]"
+            >
+              <div class="w-4 h-4 rounded-full border-2 border-amber-500/60 flex-shrink-0 mt-0.5" />
+              <div class="min-w-0 flex-1">
+                <p class="text-sm text-text-primary line-clamp-2">{{ todo.text }}</p>
+                <p class="text-[10px] text-text-tertiary mt-0.5">{{ todoAge(todo.createdAt) }}</p>
+              </div>
             </div>
           </div>
-
-          <div v-else class="text-center py-16">
-            <p class="text-sm text-text-tertiary">Select a day to see thoughts</p>
-          </div>
-        </Transition>
+        </div>
       </div>
-    </div>
+
+      <!-- Section 5: Activity Stream -->
+      <div class="bg-bg-elevated border-2 border-border-primary rounded-xl p-5">
+        <h3 class="text-xs text-text-tertiary uppercase tracking-wider mb-4">Activity Stream</h3>
+        <div v-if="Object.keys(thoughtsByDate).length === 0" class="text-xs text-text-tertiary py-4 text-center">
+          No activity in this period
+        </div>
+        <div v-else class="space-y-1 max-h-[500px] overflow-y-auto">
+          <template v-for="(dateThoughts, dateKey) in thoughtsByDate" :key="dateKey">
+            <!-- Date header -->
+            <div class="sticky top-0 bg-bg-elevated py-2 flex items-center gap-3 z-10">
+              <span class="text-xs font-semibold text-text-secondary">{{ formatDate(dateKey) }}</span>
+              <span class="text-[10px] text-text-tertiary">{{ dateThoughts.length }} thoughts</span>
+              <div class="flex gap-0.5">
+                <div
+                  v-for="t in dateThoughts.slice(0, 6)"
+                  :key="t.id"
+                  :class="['w-1.5 h-1.5 rounded-full', typeAccentBg[t.type] || 'bg-stone-400']"
+                />
+              </div>
+            </div>
+            <!-- Thoughts for this date -->
+            <div
+              v-for="t in dateThoughts"
+              :key="t.id"
+              class="flex items-start gap-3 py-1.5 px-2 rounded-lg hover:bg-bg-tertiary/50 transition-colors"
+            >
+              <span class="text-[10px] text-text-tertiary w-14 flex-shrink-0 mt-0.5">{{ formatTime(t.createdAt) }}</span>
+              <span :class="[
+                'text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0',
+                typeLabelColors[t.type] || 'text-stone-400'
+              ]">{{ t.type }}</span>
+              <p class="text-sm text-text-primary truncate flex-1 min-w-0">{{ t.text }}</p>
+              <div v-if="t.tags?.length" class="flex gap-1 flex-shrink-0">
+                <span v-for="tag in t.tags.slice(0, 2)" :key="tag" class="text-[9px] text-text-tertiary">#{{ tag }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
-
-<style scoped>
-.slide-enter-active,
-.slide-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-.slide-enter-from {
-  opacity: 0;
-  transform: translateX(10px);
-}
-.slide-leave-to {
-  opacity: 0;
-  transform: translateX(-10px);
-}
-
-/* Dynamic type colors for before pseudo-element */
-.before\:bg-stone-400::before { background-color: #a1a1aa; }
-.before\:bg-violet-500::before { background-color: #8b5cf6; }
-.before\:bg-sky-500::before { background-color: #0ea5e9; }
-.before\:bg-emerald-500::before { background-color: #10b981; }
-.before\:bg-amber-500::before { background-color: #f59e0b; }
-.before\:bg-rose-400::before { background-color: #fb7185; }
-</style>
