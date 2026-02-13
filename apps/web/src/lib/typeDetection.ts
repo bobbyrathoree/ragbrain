@@ -16,12 +16,8 @@ export function detectType(content: string): ThoughtType {
     return 'code'
   }
 
-  // Link detection - URLs at the start or www references
-  if (
-    text.startsWith('http://') ||
-    text.startsWith('https://') ||
-    text.includes('www.')
-  ) {
+  // Link detection - URLs anywhere in text
+  if (/https?:\/\/\S+/.test(text) || text.includes('www.')) {
     return 'link'
   }
 
