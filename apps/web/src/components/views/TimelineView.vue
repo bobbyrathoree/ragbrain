@@ -130,7 +130,7 @@ const currentStreak = computed(() => {
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto px-4 sm:px-6">
+  <div class="max-w-4xl mx-auto px-4 sm:px-6 pt-20 pb-24">
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
       <!-- Heatmap -->
       <div>

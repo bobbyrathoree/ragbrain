@@ -143,7 +143,7 @@ const views = [
     </button>
 
     <!-- Main Content -->
-    <main class="pt-20 pb-24">
+    <main>
       <router-view />
     </main>
 

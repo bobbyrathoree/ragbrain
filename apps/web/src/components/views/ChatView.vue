@@ -96,7 +96,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-[calc(100vh-5rem)] flex">
+  <div class="h-screen flex">
     <!-- Sidebar -->
     <aside class="w-64 border-r border-border-secondary flex flex-col bg-bg-elevated flex-shrink-0">
       <div class="p-3 border-b border-border-secondary">

@@ -222,7 +222,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto px-4 sm:px-6">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 pt-20 pb-24">
     <!-- Search + Filters -->
     <div class="space-y-4 mb-8">
       <!-- Search bar -->

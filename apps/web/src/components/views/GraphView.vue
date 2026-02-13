@@ -108,7 +108,7 @@ function initScene() {
 
   // Camera
   camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000)
-  camera.position.set(0, 0, 60)
+  camera.position.set(0, 0, 120)
 
   // Controls
   controls = new OrbitControls(camera, renderer.domElement)
@@ -501,7 +501,7 @@ function focusOnTheme(themeId: string) {
 
 function resetView() {
   const startPos = camera.position.clone()
-  const endPos = new THREE.Vector3(0, 0, 80)
+  const endPos = new THREE.Vector3(0, 0, 120)
   const startTarget = controls.target.clone()
   const endTarget = new THREE.Vector3(0, 0, 0)
   let t = 0
@@ -562,7 +562,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-[calc(100vh-5rem)] flex relative">
+  <div class="h-screen flex relative">
     <!-- Theme Sidebar -->
     <aside :class="[
       'border-r border-border-secondary overflow-auto bg-bg-elevated flex-shrink-0 transition-all duration-300',
