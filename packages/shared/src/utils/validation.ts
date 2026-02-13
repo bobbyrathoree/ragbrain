@@ -53,12 +53,20 @@ export function detectThoughtType(text: string): ThoughtType {
     return ThoughtType.DECISION;
   }
 
-  // Rationale detection - explicit flag only ("because" alone is far too broad)
-  if (text.includes('!rationale')) {
-    return ThoughtType.RATIONALE;
+  // Insight detection - learning and realization keywords
+  if (
+    /\brealized\b/i.test(lowerText) ||
+    /\binsight\b/i.test(lowerText) ||
+    /\blearned\b/i.test(lowerText) ||
+    /\bkey takeaway\b/i.test(lowerText) ||
+    /\bturns out\b/i.test(lowerText) ||
+    /\bdiscovered that\b/i.test(lowerText) ||
+    /\btil\b/i.test(lowerText)
+  ) {
+    return ThoughtType.INSIGHT;
   }
 
-  return ThoughtType.NOTE;
+  return ThoughtType.THOUGHT;
 }
 
 export function extractTags(text: string): string[] {
@@ -126,7 +134,6 @@ export function calculateDecisionScore(text: string): number {
   
   // Flags increase score
   if (text.includes('!decision')) score += 0.3;
-  if (text.includes('!rationale')) score += 0.2;
   
   return Math.min(score, 1.0);
 }

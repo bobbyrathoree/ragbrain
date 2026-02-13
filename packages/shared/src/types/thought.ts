@@ -12,12 +12,12 @@ export interface Thought {
 }
 
 export enum ThoughtType {
-  NOTE = 'note',
+  THOUGHT = 'thought',
   CODE = 'code',
   LINK = 'link',
   TODO = 'todo',
   DECISION = 'decision',
-  RATIONALE = 'rationale',
+  INSIGHT = 'insight',
 }
 
 export interface CaptureContext {
@@ -38,14 +38,14 @@ export type ThoughtCategory =
   | 'other';
 
 export type ThoughtIntent =
-  | 'note'
+  | 'thought'
   | 'question'
   | 'decision'
   | 'todo'
   | 'idea'
   | 'bug-report'
   | 'feature-request'
-  | 'rationale';
+  | 'insight';
 
 export interface DerivedFields {
   summary?: string;

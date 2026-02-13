@@ -17,9 +17,8 @@ export const thoughtsApi = {
 
   get: (id: string) => api.get<Thought>(`/thoughts/${id}`),
 
-  create: (content: string, _type?: string, tags?: string[]) =>
-    // Note: type is auto-inferred by the backend, so we don't send it
-    api.post<Thought>('/thoughts', { text: content, tags }),
+  create: (content: string, type?: string, tags?: string[]) =>
+    api.post<Thought>('/thoughts', { text: content, type, tags }),
 
   update: (id: string, content: string) =>
     api.put<Thought>(`/thoughts/${id}`, { text: content }),
