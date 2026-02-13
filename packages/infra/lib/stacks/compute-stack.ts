@@ -248,7 +248,7 @@ export class ComputeStack extends cdk.Stack {
       bundling: bundlingOptions,
     });
 
-    thoughtsTable.grantReadData(this.thoughtsLambda);
+    thoughtsTable.grantReadWriteData(this.thoughtsLambda);
 
     // Graph Lambda - builds visualization data
     this.graphLambda = new lambdaNodejs.NodejsFunction(this, 'GraphLambda', {

@@ -12,7 +12,9 @@ const {
   isLoadingMore,
   hasMore,
   fetchThoughts,
-  fetchMoreThoughts
+  fetchMoreThoughts,
+  updateThought,
+  deleteThought,
 } = useThoughts()
 
 const {
@@ -50,6 +52,61 @@ const handleSearchKeydown = (e: KeyboardEvent) => {
     handleClearSearch()
     searchInputRef.value?.blur()
   }
+}
+
+// Edit/delete state
+const editingThought = ref<Thought | null>(null)
+const editContent = ref('')
+const editTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const isSavingEdit = ref(false)
+const confirmingDelete = ref<Thought | null>(null)
+const menuOpenId = ref<string | null>(null)
+
+const startEdit = (thought: Thought) => {
+  editingThought.value = thought
+  editContent.value = thought.text
+  menuOpenId.value = null
+  setTimeout(() => editTextareaRef.value?.focus(), 50)
+}
+
+const saveEdit = async () => {
+  if (!editingThought.value || !editContent.value.trim()) return
+  isSavingEdit.value = true
+  try {
+    await updateThought(editingThought.value.id, editContent.value.trim())
+    editingThought.value = null
+    editContent.value = ''
+  } catch (e) {
+    console.error('Failed to save edit:', e)
+  } finally {
+    isSavingEdit.value = false
+  }
+}
+
+const cancelEdit = () => {
+  editingThought.value = null
+  editContent.value = ''
+}
+
+const confirmDelete = (thought: Thought) => {
+  confirmingDelete.value = thought
+  menuOpenId.value = null
+}
+
+const executeDelete = async () => {
+  if (!confirmingDelete.value) return
+  try {
+    await deleteThought(confirmingDelete.value.id)
+  } catch (e) {
+    console.error('Failed to delete:', e)
+  } finally {
+    confirmingDelete.value = null
+  }
+}
+
+const toggleMenu = (id: string, e: Event) => {
+  e.stopPropagation()
+  menuOpenId.value = menuOpenId.value === id ? null : id
 }
 
 // Filtering
@@ -302,7 +359,7 @@ onUnmounted(() => {
         @click="openThought(thought)"
       >
         <!-- Inner content with type accent bar -->
-        <div class="flex">
+        <div class="flex relative">
           <!-- Accent bar -->
           <div :class="[
             'w-1 rounded-full flex-shrink-0 my-4 ml-3',
@@ -332,6 +389,35 @@ onUnmounted(() => {
               <span :class="['uppercase tracking-wider font-semibold', typeLabelColor[thought.type] || 'text-stone-400']">{{ thought.type }}</span>
               <span class="text-text-tertiary">·</span>
               <span class="text-text-tertiary">{{ formatTime(thought.createdAt) }}</span>
+            </div>
+          </div>
+
+          <!-- Action menu -->
+          <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              @click="toggleMenu(thought.id, $event)"
+              class="w-7 h-7 flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary rounded-lg transition-colors"
+            >
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+              </svg>
+            </button>
+            <div
+              v-if="menuOpenId === thought.id"
+              class="absolute right-0 mt-1 w-28 bg-bg-elevated border border-border-secondary rounded-lg shadow-lg overflow-hidden z-10"
+            >
+              <button
+                @click.stop="startEdit(thought)"
+                class="w-full px-3 py-2 text-left text-xs text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition-colors"
+              >
+                Edit
+              </button>
+              <button
+                @click.stop="confirmDelete(thought)"
+                class="w-full px-3 py-2 text-left text-xs text-rose-400 hover:text-rose-300 hover:bg-bg-tertiary transition-colors"
+              >
+                Delete
+              </button>
             </div>
           </div>
         </div>
@@ -395,6 +481,69 @@ onUnmounted(() => {
                   <span class="text-text-tertiary">{{ formatTime(selectedThought.createdAt) }}</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Edit modal -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="editingThought" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="cancelEdit" />
+          <div class="relative w-full max-w-2xl bg-bg-elevated border border-border-primary rounded-2xl shadow-2xl overflow-hidden">
+            <div class="px-6 pt-5 pb-3">
+              <span class="text-xs text-text-tertiary uppercase tracking-wider">Edit thought</span>
+            </div>
+            <div class="px-6 pb-4">
+              <textarea
+                ref="editTextareaRef"
+                v-model="editContent"
+                class="w-full h-40 bg-transparent text-text-primary text-[15px] leading-relaxed placeholder:text-text-tertiary resize-none focus:outline-none"
+                @keydown.meta.enter.prevent="saveEdit"
+                @keydown.ctrl.enter.prevent="saveEdit"
+                @keydown.escape="cancelEdit"
+              />
+            </div>
+            <div class="flex items-center justify-between px-6 py-4 border-t border-border-secondary">
+              <span class="text-xs text-text-tertiary">&#8984;Enter to save</span>
+              <div class="flex gap-2">
+                <button @click="cancelEdit" class="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+                  Cancel
+                </button>
+                <button
+                  @click="saveEdit"
+                  :disabled="!editContent.trim() || isSavingEdit"
+                  class="px-4 py-2 text-sm bg-text-primary text-bg-primary rounded-lg font-medium disabled:opacity-50"
+                >
+                  {{ isSavingEdit ? 'Saving...' : 'Save' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Delete confirmation -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="confirmingDelete" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="confirmingDelete = null" />
+          <div class="relative w-full max-w-sm bg-bg-elevated border border-border-primary rounded-2xl shadow-2xl p-6">
+            <h3 class="text-sm font-semibold text-text-primary mb-2">Delete thought?</h3>
+            <p class="text-xs text-text-tertiary mb-6 line-clamp-2">{{ confirmingDelete.text }}</p>
+            <div class="flex justify-end gap-2">
+              <button @click="confirmingDelete = null" class="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+                Cancel
+              </button>
+              <button
+                @click="executeDelete"
+                class="px-4 py-2 text-sm bg-rose-500 text-white rounded-lg font-medium hover:bg-rose-600"
+              >
+                Delete
+              </button>
             </div>
           </div>
         </div>

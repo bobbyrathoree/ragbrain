@@ -1,5 +1,5 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { DynamoDBClient, QueryCommand, GetItemCommand, BatchGetItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, GetItemCommand, BatchGetItemCommand, UpdateItemCommand, DeleteItemCommand } from '@aws-sdk/client-dynamodb';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 import {
@@ -232,6 +232,106 @@ async function handleRelatedThoughts(
   };
 }
 
+async function handleUpdateThought(
+  event: APIGatewayProxyEventV2,
+  user: string
+): Promise<APIGatewayProxyResultV2> {
+  const thoughtId = event.pathParameters?.id;
+  if (!thoughtId) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Thought ID is required' }),
+    };
+  }
+
+  let body: { text?: string };
+  try {
+    body = JSON.parse(event.body || '{}');
+  } catch {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Invalid JSON' }),
+    };
+  }
+
+  if (!body.text || body.text.trim().length === 0) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Text is required' }),
+    };
+  }
+
+  // Find the thought to get its DynamoDB key
+  const thought = await getThoughtById(user, thoughtId);
+  if (!thought) {
+    return {
+      statusCode: 404,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Thought not found' }),
+    };
+  }
+
+  // Update the text field
+  await dynamodb.send(new UpdateItemCommand({
+    TableName: TABLE_NAME,
+    Key: {
+      pk: { S: thought.pk },
+      sk: { S: thought.sk },
+    },
+    UpdateExpression: 'SET #text = :text',
+    ExpressionAttributeNames: { '#text': 'text' },
+    ExpressionAttributeValues: { ':text': { S: body.text.trim() } },
+  }));
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: thoughtId, text: body.text.trim() }),
+  };
+}
+
+async function handleDeleteThought(
+  event: APIGatewayProxyEventV2,
+  user: string
+): Promise<APIGatewayProxyResultV2> {
+  const thoughtId = event.pathParameters?.id;
+  if (!thoughtId) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Thought ID is required' }),
+    };
+  }
+
+  // Find the thought to get its DynamoDB key
+  const thought = await getThoughtById(user, thoughtId);
+  if (!thought) {
+    return {
+      statusCode: 404,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Thought not found' }),
+    };
+  }
+
+  // Delete the item
+  await dynamodb.send(new DeleteItemCommand({
+    TableName: TABLE_NAME,
+    Key: {
+      pk: { S: thought.pk },
+      sk: { S: thought.sk },
+    },
+  }));
+
+  return {
+    statusCode: 204,
+    headers: { 'Content-Type': 'application/json' },
+    body: '',
+  };
+}
+
 export const handler = async (
   event: APIGatewayProxyEventV2
 ): Promise<APIGatewayProxyResultV2> => {
@@ -251,10 +351,20 @@ export const handler = async (
     };
   }
 
-  // Route based on path
+  // Route based on method and path
+  const method = event.requestContext.http.method;
   const path = event.rawPath || '';
+
   if (path.includes('/related')) {
     return handleRelatedThoughts(event, user);
+  }
+
+  if (method === 'PUT' && event.pathParameters?.id) {
+    return handleUpdateThought(event, user);
+  }
+
+  if (method === 'DELETE' && event.pathParameters?.id) {
+    return handleDeleteThought(event, user);
   }
 
   try {

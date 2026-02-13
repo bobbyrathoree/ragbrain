@@ -61,6 +61,17 @@ export function useThoughts() {
     }
   }
 
+  const updateThought = async (id: string, text: string) => {
+    try {
+      await thoughtsApi.update(id, text)
+      const thought = thoughts.value.find((t) => t.id === id)
+      if (thought) thought.text = text
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to update thought'
+      throw e
+    }
+  }
+
   const deleteThought = async (id: string) => {
     try {
       await thoughtsApi.delete(id)
@@ -80,6 +91,7 @@ export function useThoughts() {
     fetchThoughts,
     fetchMoreThoughts,
     createThought,
+    updateThought,
     deleteThought,
   }
 }

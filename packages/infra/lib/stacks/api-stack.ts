@@ -191,6 +191,18 @@ export class ApiStack extends cdk.Stack {
       authorizer,
     });
 
+    // PUT /thoughts/{id} - Update thought
+    // DELETE /thoughts/{id} - Delete thought
+    this.api.addRoutes({
+      path: '/thoughts/{id}',
+      methods: [apigateway.HttpMethod.PUT, apigateway.HttpMethod.DELETE],
+      integration: new apigatewayIntegrations.HttpLambdaIntegration(
+        'ThoughtDetailIntegration',
+        thoughtsLambda
+      ),
+      authorizer,
+    });
+
     // GET /thoughts/{id}/related - Get related thoughts
     this.api.addRoutes({
       path: '/thoughts/{id}/related',
