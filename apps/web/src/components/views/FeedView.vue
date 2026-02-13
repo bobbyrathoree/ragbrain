@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useThoughts } from '@/composables/useThoughts'
 import { useSearch } from '@/composables/useSearch'
+import { thoughtsApi } from '@/api'
 import type { Thought, ThoughtType } from '@/types'
 
 const MAX_LENGTH = 280
@@ -154,6 +155,8 @@ const displayThoughts = computed(() => {
 
 // Selected thought for modal
 const selectedThought = ref<Thought | null>(null)
+const relatedThoughts = ref<Thought[]>([])
+const isLoadingRelated = ref(false)
 
 const isTruncated = (content: string) => content.length > MAX_LENGTH
 
@@ -175,14 +178,25 @@ const formatTime = (date: string) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-const openThought = (thought: Thought) => {
+const openThought = async (thought: Thought) => {
   if (isTruncated(thought.text)) {
     selectedThought.value = thought
+    relatedThoughts.value = []
+    isLoadingRelated.value = true
+    try {
+      const res = await thoughtsApi.related(thought.id)
+      relatedThoughts.value = res.related || []
+    } catch {
+      relatedThoughts.value = []
+    } finally {
+      isLoadingRelated.value = false
+    }
   }
 }
 
 const closeModal = () => {
   selectedThought.value = null
+  relatedThoughts.value = []
 }
 
 const typeFilters: Array<{ value: ThoughtType | 'all'; label: string }> = [
@@ -479,6 +493,24 @@ onUnmounted(() => {
                   <span :class="['uppercase tracking-wider font-semibold', typeLabelColor[selectedThought.type] || 'text-stone-400']">{{ selectedThought.type }}</span>
                   <span class="text-text-tertiary">·</span>
                   <span class="text-text-tertiary">{{ formatTime(selectedThought.createdAt) }}</span>
+                </div>
+
+                <!-- Related Thoughts -->
+                <div v-if="isLoadingRelated" class="mt-4 pt-4 border-t border-border-secondary">
+                  <div class="text-xs text-text-tertiary">Finding related thoughts...</div>
+                </div>
+                <div v-else-if="relatedThoughts.length > 0" class="mt-4 pt-4 border-t border-border-secondary">
+                  <h4 class="text-xs text-text-tertiary uppercase tracking-wider mb-3">Related</h4>
+                  <div class="space-y-2">
+                    <div
+                      v-for="related in relatedThoughts.slice(0, 5)"
+                      :key="related.id"
+                      class="p-2.5 bg-bg-tertiary/50 rounded-lg"
+                    >
+                      <p class="text-xs text-text-primary line-clamp-2">{{ related.text }}</p>
+                      <span :class="['text-[10px] uppercase tracking-wider mt-1 inline-block', typeLabelColor[related.type] || 'text-stone-400']">{{ related.type }}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

@@ -24,4 +24,7 @@ export const thoughtsApi = {
     api.put<Thought>(`/thoughts/${id}`, { text: content }),
 
   delete: (id: string) => api.delete<void>(`/thoughts/${id}`),
+
+  related: (id: string) =>
+    api.get<{ thoughtId: string; related: Thought[]; count: number }>(`/thoughts/${id}/related`),
 }

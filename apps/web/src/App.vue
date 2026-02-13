@@ -27,6 +27,27 @@ onMounted(() => {
   if (apiKey) fetchThoughts()
 })
 
+// Export handler
+const exportData = async () => {
+  const apiKey = localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || ''
+  const baseUrl = localStorage.getItem('ragbrain_api_endpoint') || import.meta.env.VITE_API_ENDPOINT || ''
+  try {
+    const res = await fetch(`${baseUrl}/export`, {
+      headers: { 'Content-Type': 'application/json', ...(apiKey && { 'x-api-key': apiKey }) },
+    })
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ragbrain-export-${new Date().toISOString().split('T')[0]}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('Export failed:', e)
+  }
+}
+
 // Command palette commands
 const commands = [
   { id: 'capture', label: 'New thought', shortcut: '⌥S', action: () => { commandPaletteOpen.value = false; captureOpen.value = true } },
@@ -34,6 +55,7 @@ const commands = [
   { id: 'feed', label: 'Go to Feed', shortcut: '1', action: () => { commandPaletteOpen.value = false; router.push('/') } },
   { id: 'graph', label: 'Go to Graph', shortcut: '2', action: () => { commandPaletteOpen.value = false; router.push('/graph') } },
   { id: 'timeline', label: 'Go to Timeline', shortcut: '3', action: () => { commandPaletteOpen.value = false; router.push('/timeline') } },
+  { id: 'export', label: 'Export data', action: () => { commandPaletteOpen.value = false; exportData() } },
   { id: 'settings', label: 'Open settings', action: () => { commandPaletteOpen.value = false; settingsOpen.value = true } },
 ]
 

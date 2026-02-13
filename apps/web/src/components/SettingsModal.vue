@@ -23,6 +23,26 @@ const setTheme = (t: 'light' | 'dark') => {
 
 const close = () => emit('update:modelValue', false)
 
+const handleExport = async () => {
+  try {
+    const baseUrl = localStorage.getItem('ragbrain_api_endpoint') || import.meta.env.VITE_API_ENDPOINT || ''
+    const key = localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || ''
+    const res = await fetch(`${baseUrl}/export`, {
+      headers: { 'Content-Type': 'application/json', ...(key && { 'x-api-key': key }) },
+    })
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ragbrain-export-${new Date().toISOString().split('T')[0]}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('Export failed:', e)
+  }
+}
+
 const saveSettings = () => {
   localStorage.setItem('ragbrain_api_key', apiKey.value)
   localStorage.setItem('ragbrain_api_endpoint', apiEndpoint.value)
@@ -93,6 +113,14 @@ const saveSettings = () => {
               class="w-full py-2 text-sm bg-text-primary text-bg-primary rounded-lg font-medium"
             >
               Save Settings
+            </button>
+
+            <!-- Export -->
+            <button
+              @click="handleExport"
+              class="w-full py-2 text-sm border border-border-secondary text-text-secondary hover:text-text-primary rounded-lg font-medium transition-colors"
+            >
+              Export Data (JSON)
             </button>
 
             <!-- Shortcuts -->
