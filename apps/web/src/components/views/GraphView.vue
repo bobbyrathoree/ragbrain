@@ -108,7 +108,7 @@ function initScene() {
 
   // Camera
   camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000)
-  camera.position.set(0, 0, 80)
+  camera.position.set(0, 0, 60)
 
   // Controls
   controls = new OrbitControls(camera, renderer.domElement)
@@ -130,9 +130,9 @@ function initScene() {
 
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(width, height),
-    1.2,   // strength
-    0.6,   // radius
-    0.15   // threshold
+    1.8,   // strength - cranked up for visible glow
+    0.8,   // radius
+    0.1    // threshold - lower = more things glow
   )
   composer.addPass(bloomPass)
   composer.addPass(new OutputPass())
@@ -188,15 +188,19 @@ function createNodes() {
     const node = nodes.value[i]
     const [r, g, b] = getThemeColor(node)
 
-    nodePositions[i * 3] = node.x || (Math.random() - 0.5) * 50
-    nodePositions[i * 3 + 1] = node.y || (Math.random() - 0.5) * 50
-    nodePositions[i * 3 + 2] = (Math.random() - 0.5) * 30
+    // Spread initial positions by theme to avoid all-at-center start
+    const themeIdx = themes.value.findIndex(t => t.id === node.themeId)
+    const themeAngle = (themeIdx / Math.max(themes.value.length, 1)) * Math.PI * 2
+    const spread = 25 + Math.random() * 15
+    nodePositions[i * 3] = Math.cos(themeAngle) * spread + (Math.random() - 0.5) * 10
+    nodePositions[i * 3 + 1] = Math.sin(themeAngle) * spread + (Math.random() - 0.5) * 10
+    nodePositions[i * 3 + 2] = (Math.random() - 0.5) * 15
 
-    nodeSizes[i] = 3 + node.importance * 8
+    nodeSizes[i] = 6 + node.importance * 14
     nodeColors[i * 3] = r
     nodeColors[i * 3 + 1] = g
     nodeColors[i * 3 + 2] = b
-    nodeAlphas[i] = 0.3 + node.recency * 0.7
+    nodeAlphas[i] = 0.5 + node.recency * 0.5
   }
 
   geo.setAttribute('position', new THREE.BufferAttribute(nodePositions, 3))
@@ -320,12 +324,12 @@ function startForceSimulation() {
   }))
 
   simulation = d3.forceSimulation(simNodes)
-    .force('charge', d3.forceManyBody().strength(-15))
-    .force('center', d3.forceCenter(0, 0))
+    .force('charge', d3.forceManyBody().strength(-40))
+    .force('center', d3.forceCenter(0, 0).strength(0.05))
     .force('link', d3.forceLink(edges.value.map(e => ({
       source: simNodes.findIndex(n => n.id === e.source),
       target: simNodes.findIndex(n => n.id === e.target),
-    }))).distance(15).strength(0.3))
+    }))).distance(8).strength(0.2))
     .force('cluster', (alpha: number) => {
       const centroids = new Map<string, { x: number; y: number; count: number }>()
       simNodes.forEach(n => {
@@ -337,8 +341,8 @@ function startForceSimulation() {
       simNodes.forEach(n => {
         const c = centroids.get(n.themeId)
         if (c) {
-          n.vx! += (c.x - n.x!) * 0.1 * alpha
-          n.vy! += (c.y - n.y!) * 0.1 * alpha
+          n.vx! += (c.x - n.x!) * 0.15 * alpha
+          n.vy! += (c.y - n.y!) * 0.15 * alpha
         }
       })
     })
@@ -353,7 +357,7 @@ function startForceSimulation() {
       updateEdgePositions()
     })
     .alpha(1)
-    .alphaDecay(0.02)
+    .alphaDecay(0.05)
 }
 
 function updateEdgePositions() {
@@ -385,7 +389,7 @@ function animate() {
     const sizes = pointCloud.geometry.attributes.size
     for (let i = 0; i < nodes.value.length; i++) {
       const node = nodes.value[i]
-      const baseSize = 3 + node.importance * 8
+      const baseSize = 6 + node.importance * 14
       const pulseSpeed = 0.5 + node.recency * 2 // Recent nodes pulse faster
       const pulseAmount = 0.3 + node.recency * 0.7 // Recent nodes pulse more
       const pulse = 1 + Math.sin(time * pulseSpeed + i * 0.5) * 0.15 * pulseAmount
@@ -426,8 +430,8 @@ function onMouseMove(event: MouseEvent) {
 
       for (let i = 0; i < nodes.value.length; i++) {
         nodeAlphas[i] = connectedIds.has(nodes.value[i].id)
-          ? 0.5 + nodes.value[i].recency * 0.5
-          : 0.08
+          ? 0.7 + nodes.value[i].recency * 0.3
+          : 0.06
       }
       pointCloud.geometry.attributes.alpha.needsUpdate = true
     }
@@ -439,7 +443,7 @@ function onMouseMove(event: MouseEvent) {
     // Restore all alphas
     if (nodeAlphas && pointCloud) {
       for (let i = 0; i < nodes.value.length; i++) {
-        nodeAlphas[i] = 0.3 + nodes.value[i].recency * 0.7
+        nodeAlphas[i] = 0.5 + nodes.value[i].recency * 0.5
       }
       pointCloud.geometry.attributes.alpha.needsUpdate = true
     }
@@ -580,7 +584,7 @@ onUnmounted(() => {
             class="w-4 h-4 mx-auto rounded-full cursor-pointer hover:scale-150 transition-transform"
             :style="{ backgroundColor: theme.color }"
             :title="`${theme.label} (${theme.count})`"
-            @click="sidebarCollapsed = false; expandedTheme = theme.id"
+            @click="sidebarCollapsed = false; expandedTheme = theme.id; focusOnTheme(theme.id)"
           />
         </div>
       </div>
@@ -600,7 +604,7 @@ onUnmounted(() => {
 
         <div class="divide-y divide-border-secondary">
           <div v-for="theme in themes" :key="theme.id" class="group">
-            <button @click="expandedTheme = expandedTheme === theme.id ? null : theme.id" class="w-full p-4 text-left hover:bg-bg-tertiary transition-colors">
+            <button @click="expandedTheme = expandedTheme === theme.id ? null : theme.id; focusOnTheme(theme.id)" class="w-full p-4 text-left hover:bg-bg-tertiary transition-colors">
               <div class="flex items-center gap-3">
                 <div class="w-3 h-3 rounded-full flex-shrink-0" :style="{ backgroundColor: theme.color }" />
                 <div class="flex-1 min-w-0">
@@ -620,12 +624,6 @@ onUnmounted(() => {
                 >
                   {{ thought.text }}
                 </div>
-                <button
-                  @click="focusOnTheme(theme.id)"
-                  class="w-full text-xs text-accent-primary hover:text-accent-primary/80 py-1.5 flex items-center justify-center gap-1"
-                >
-                  Focus on cluster
-                </button>
               </div>
             </div>
           </div>
