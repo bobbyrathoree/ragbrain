@@ -38,6 +38,7 @@ interface DynamoThought {
   entities?: Set<string>;
   relatedIds?: Set<string>;
   indexedAt?: number;
+  indexingStatus?: string;
   context?: {
     app?: string;
     windowTitle?: string;
@@ -136,6 +137,7 @@ function formatThought(item: DynamoThought): Thought {
     type: item.type as ThoughtType,
     tags: Array.from(item.tags || []),
     context: item.context,
+    indexingStatus: (item.indexingStatus as 'pending' | 'indexed' | 'failed') || undefined,
     derived: {
       summary: item.summary,
       decisionScore: item.decisionScore,

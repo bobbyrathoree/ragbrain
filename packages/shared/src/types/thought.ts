@@ -22,6 +22,7 @@ export interface Thought {
   derived?: DerivedFields;
   syncStatus?: SyncStatus;
   syncedAt?: string;
+  indexingStatus?: 'pending' | 'indexed' | 'failed';
 }
 
 export interface CaptureContext {

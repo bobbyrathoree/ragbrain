@@ -203,6 +203,12 @@ export class MonitoringStack extends cdk.Stack {
       right: [
         new cloudwatch.Metric({
           namespace: projectName,
+          metricName: 'SearchHitCount',
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5),
+        }),
+        new cloudwatch.Metric({
+          namespace: projectName,
           metricName: 'CitationCount',
           statistic: 'Average',
           period: cdk.Duration.minutes(5),
@@ -324,6 +330,34 @@ export class MonitoringStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     dlqAlarm.addAlarmAction(new cloudwatchActions.SnsAction(this.alarmTopic));
+
+    // Search hit count alarm — fires when multiple /ask queries return zero results,
+    // indicating OpenSearch indexing is broken (not just a single off-topic query)
+    const searchHitAlarm = new cloudwatch.Alarm(this, 'SearchHitAlarm', {
+      alarmName: `${projectName}-${environment}-zero-search-hits`,
+      alarmDescription: 'Multiple /ask queries returning zero search results — possible indexing failure',
+      metric: new cloudwatch.MathExpression({
+        expression: 'IF(queries >= 3 AND totalHits == 0, 1, 0)',
+        usingMetrics: {
+          totalHits: new cloudwatch.Metric({
+            namespace: projectName,
+            metricName: 'SearchHitCount',
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(10),
+          }),
+          queries: new cloudwatch.Metric({
+            namespace: projectName,
+            metricName: 'SearchHitCount',
+            statistic: 'SampleCount',
+            period: cdk.Duration.minutes(10),
+          }),
+        },
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    searchHitAlarm.addAlarmAction(new cloudwatchActions.SnsAction(this.alarmTopic));
 
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'DashboardUrl', {

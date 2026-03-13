@@ -99,6 +99,7 @@ export const handler = async (
         gsi1pk: { S: `type#${thoughtType}` },
         gsi1sk: { S: `ts#${createdAtEpoch}` },
         ttl: { N: (Math.floor(Date.now() / 1000) + 31536000).toString() },
+        indexingStatus: { S: 'pending' },
       },
       ConditionExpression: 'attribute_not_exists(pk)',
     })).catch((error: any) => {

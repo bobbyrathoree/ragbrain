@@ -167,6 +167,7 @@ export const handler = async (
     // Emit metrics
     await emitMetrics(cloudwatch, [
       { name: 'AskLatency', value: processingTime, unit: 'Milliseconds' },
+      { name: 'SearchHitCount', value: searchResults.length },
       { name: 'CitationCount', value: citations.length },
       { name: 'AnswerConfidence', value: confidence, unit: 'None' },
       { name: 'AbstainRate', value: citations.length === 0 ? 1 : 0, unit: 'None' },

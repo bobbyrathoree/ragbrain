@@ -13,6 +13,7 @@ const {
   isLoadingList,
   isLoadingMessages,
   isSending,
+  error: chatError,
   fetchConversations,
   selectConversation,
   startConversation,
@@ -245,6 +246,9 @@ onMounted(() => {
       <!-- Input area -->
       <div class="border-t border-border-secondary px-6 py-4 bg-bg-elevated">
         <div class="max-w-3xl mx-auto">
+          <div v-if="chatError" class="mb-3 px-4 py-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg">
+            {{ chatError }}
+          </div>
           <div class="flex gap-3">
             <input
               ref="inputRef"

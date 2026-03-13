@@ -35,6 +35,7 @@ export interface Thought {
   tags: string[]
   createdAt: string
   updatedAt?: string
+  indexingStatus?: 'pending' | 'indexed' | 'failed'
 }
 
 // AskResponse with required confidence/processingTime for frontend display
