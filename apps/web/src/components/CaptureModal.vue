@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { detectType } from '@/lib/typeDetection'
-import { extractTags } from '@/lib/tagExtraction'
+import { detectThoughtType, extractTags } from '@ragbrain/shared'
 import { useThoughts } from '@/composables/useThoughts'
 import type { ThoughtType } from '@/types'
 
@@ -12,7 +11,7 @@ const { createThought } = useThoughts()
 
 const captureContent = ref('')
 const captureTypeOverride = ref<ThoughtType | null>(null)
-const detectedType = computed<ThoughtType>(() => detectType(captureContent.value))
+const detectedType = computed<ThoughtType>(() => detectThoughtType(captureContent.value))
 const captureType = computed<ThoughtType>(() => captureTypeOverride.value || detectedType.value)
 const captureTags = computed(() => extractTags(captureContent.value))
 const isSaving = ref(false)
