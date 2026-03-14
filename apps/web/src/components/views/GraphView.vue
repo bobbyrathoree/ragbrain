@@ -83,14 +83,14 @@ onUnmounted(() => {
 // ── Data to Renderer sync ───────────────────────────────────────
 
 watch(galaxyData, (data) => {
-  if (data && renderer) {
-    renderer.setGalaxyData([...data.themes] as any, [...data.affinities])
+  if (data?.themes && renderer) {
+    renderer.setGalaxyData([...data.themes] as any, [...(data.affinities || [])])
   }
 })
 
 watch(constellationData, (data) => {
-  if (data && renderer) {
-    renderer.setConstellationData([...data.thoughts] as any, [...data.edges], data.themeColor)
+  if (data?.thoughts && renderer) {
+    renderer.setConstellationData([...data.thoughts] as any, [...(data.edges || [])], data.themeColor)
   }
 })
 

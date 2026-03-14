@@ -59,11 +59,18 @@ export const graphApi = {
   },
 
   theme: async (id: string): Promise<ConstellationView> => {
-    try {
-      return await api.get<ConstellationView>(`/graph?level=theme&themeId=${id}`)
-    } catch {
-      // Fallback: fetch legacy and filter to theme
-      const legacy = await api.get<GraphData>('/graph')
+    // Try new LOD endpoint, detect legacy response, or catch errors
+    const data = await api.get<ConstellationView | GraphData>('/graph?level=theme&themeId=' + id)
+      .catch(() => api.get<GraphData>('/graph'))
+
+    // If the response has the new LOD format, return directly
+    if ('level' in data && data.level === 1 && 'thoughts' in data) {
+      return data as ConstellationView
+    }
+
+    // Legacy fallback: transform GraphResponse → ConstellationView
+    {
+      const legacy = data as GraphData
       const themeNodes = (legacy.nodes || []).filter(n => n.themeId === id)
       const theme = legacy.themes?.find(t => t.id === id)
       const nodeIds = new Set(themeNodes.map(n => n.id))
@@ -84,7 +91,7 @@ export const graphApi = {
         edges: (legacy.edges || [])
           .filter(e => nodeIds.has(e.source) && nodeIds.has(e.target))
           .map(e => ({ source: e.source, target: e.target, similarity: e.similarity })),
-      }
+      };
     }
   },
 
