@@ -94,34 +94,16 @@ watch(constellationData, (data) => {
   }
 })
 
-function handleDrillOut() {
-  renderer?.transitionToGalaxy()
-  drillOut()
-}
+// Drill-out is handled by the renderer's onClick(null) callback
 </script>
 
 <template>
   <div class="h-screen flex relative">
     <!-- Main canvas area -->
     <div class="flex-1 flex flex-col">
-      <!-- Breadcrumb + stats bar -->
-      <div class="absolute top-16 left-4 z-10 flex items-center gap-2 text-sm">
-        <button
-          @click="currentLevel === 1 ? handleDrillOut() : null"
-          :class="[
-            'text-text-tertiary transition-colors',
-            currentLevel === 1 ? 'hover:text-text-primary cursor-pointer' : 'cursor-default'
-          ]"
-        >
-          Galaxy
-        </button>
-        <template v-if="currentLevel === 1">
-          <span class="text-text-tertiary">/</span>
-          <span class="text-text-primary font-medium">{{ selectedThemeLabel }}</span>
-        </template>
-        <span v-if="galaxyData" class="text-text-tertiary text-xs ml-4">
-          {{ galaxyData.metadata.totalThoughts }} thoughts
-        </span>
+      <!-- Theme label (constellation only, minimal) -->
+      <div v-if="currentLevel === 1" class="absolute top-16 left-4 z-10">
+        <span class="text-text-primary text-sm font-medium">{{ selectedThemeLabel }}</span>
       </div>
 
       <!-- Canvas container -->
@@ -160,10 +142,10 @@ function handleDrillOut() {
         </div>
       </div>
 
-      <!-- Controls hint -->
-      <div class="absolute bottom-4 right-4 z-10 text-[11px] text-text-tertiary bg-bg-elevated/60 backdrop-blur-sm rounded-lg px-3 py-2 border border-border-secondary">
-        <span v-if="currentLevel === 0">Click a cluster to explore</span>
-        <span v-else>Click a thought for details &middot; Click background to go back</span>
+      <!-- Controls hint (minimal) -->
+      <div class="absolute bottom-4 right-4 z-10 text-[10px] text-text-tertiary/50 px-2 py-1">
+        <span v-if="currentLevel === 0">Click to explore</span>
+        <span v-else>Drag to rearrange &middot; Click outside to go back</span>
       </div>
     </div>
 

@@ -8,9 +8,9 @@ import type { GalaxyTheme, ThemeAffinity, ConstellationNode, ConstellationEdge }
 
 // ── Constants ───────────────────────────────────────────────────
 
-const NODE_H = 34
-const NODE_PAD = 12
-const NODE_R = 6
+const NODE_H = 36
+const NODE_PAD = 18
+const NODE_R = 8
 
 const TYPE_COLORS: Record<string, string> = {
   thought: '#a8a29e', decision: '#a78bfa', insight: '#38bdf8',
@@ -60,7 +60,7 @@ function blendColors(c1: string, c2: string, a: number): string {
 
 function measureNodeWidth(ctx: CanvasRenderingContext2D, text: string): number {
   ctx.font = '600 12px "Inter", system-ui, sans-serif'
-  return Math.min(280, Math.max(100, ctx.measureText(text).width + NODE_PAD * 2 + 24))
+  return Math.min(320, Math.max(120, ctx.measureText(text).width + NODE_PAD * 2 + 30))
 }
 
 /** Generate heuristic edges + track the reason for each connection */
@@ -184,7 +184,8 @@ export class CanvasRenderer {
       .on('start', (e) => {
         if (!e.subject) return
         self.isDragging = true
-        if (self.constellationSim) self.constellationSim.alphaTarget(0.3).restart()
+        // Low alpha = only directly connected nodes feel the pull (rubber band)
+        if (self.constellationSim) self.constellationSim.alphaTarget(0.08).restart()
         e.subject.fx = e.subject.x
         e.subject.fy = e.subject.y
       })
@@ -196,7 +197,11 @@ export class CanvasRenderer {
       .on('end', (e) => {
         if (!e.subject) return
         self.isDragging = false
-        if (self.constellationSim) self.constellationSim.alphaTarget(0)
+        // Brief burst so it snaps back with a ripple
+        if (self.constellationSim) {
+          self.constellationSim.alphaTarget(0.15).restart()
+          setTimeout(() => self.constellationSim?.alphaTarget(0), 600)
+        }
         e.subject.fx = null
         e.subject.fy = null
       })
@@ -475,19 +480,19 @@ export class CanvasRenderer {
 
       // Type shape indicator (left)
       ctx.fillStyle = tc
-      ctx.font = '12px system-ui, sans-serif'
+      ctx.font = '13px system-ui, sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(shape, x + 14, y + NODE_H / 2)
+      ctx.fillText(shape, x + 16, y + NODE_H / 2)
 
-      // Text label (single line, truncated)
+      // Text label (single line, with breathing room)
       ctx.fillStyle = isHovered ? '#fff' : 'rgba(255,255,255,0.8)'
       ctx.font = node.type === 'code'
         ? '11px "SF Mono", "JetBrains Mono", monospace'
         : '600 12px "Inter", system-ui, sans-serif'
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
-      ctx.fillText(node.text, x + 28, y + NODE_H / 2, w - 38)
+      ctx.fillText(node.text, x + 32, y + NODE_H / 2, w - 48)
 
       ctx.restore()
     }
