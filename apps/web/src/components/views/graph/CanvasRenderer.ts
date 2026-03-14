@@ -184,26 +184,33 @@ export class CanvasRenderer {
       .on('start', (e) => {
         if (!e.subject) return
         self.isDragging = true
-        // Low alpha = only directly connected nodes feel the pull (rubber band)
-        if (self.constellationSim) self.constellationSim.alphaTarget(0.08).restart()
+        // FREEZE the simulation — nothing else moves while dragging
+        if (self.constellationSim) self.constellationSim.stop()
+        // Pin the node
         e.subject.fx = e.subject.x
         e.subject.fy = e.subject.y
       })
       .on('drag', (e) => {
         if (!e.subject) return
+        // Move ONLY this node — edges stretch like rubber bands
         e.subject.fx = self.transform.invertX(e.x)
         e.subject.fy = self.transform.invertY(e.y)
+        // Update the actual position so edges draw correctly
+        e.subject.x = e.subject.fx
+        e.subject.y = e.subject.fy
       })
       .on('end', (e) => {
         if (!e.subject) return
         self.isDragging = false
-        // Brief burst so it snaps back with a ripple
-        if (self.constellationSim) {
-          self.constellationSim.alphaTarget(0.15).restart()
-          setTimeout(() => self.constellationSim?.alphaTarget(0), 600)
-        }
+        // Release the pin — let physics snap it back
         e.subject.fx = null
         e.subject.fy = null
+        // Restart with a burst — the node flies back and ripples through the graph
+        if (self.constellationSim) {
+          self.constellationSim.alpha(0.5).restart()
+          // Cool down after the ripple
+          setTimeout(() => self.constellationSim?.alphaTarget(0), 800)
+        }
       })
     sel.call(drag as any)
 
