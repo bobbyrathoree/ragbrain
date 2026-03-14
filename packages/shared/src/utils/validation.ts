@@ -35,8 +35,8 @@ export function detectThoughtType(text: string): ThoughtType {
     return ThoughtType.CODE;
   }
 
-  // Link detection
-  if (/https?:\/\//.test(text)) {
+  // Link detection - URLs or www. prefix
+  if (/https?:\/\//.test(text) || text.includes('www.')) {
     return ThoughtType.LINK;
   }
 
