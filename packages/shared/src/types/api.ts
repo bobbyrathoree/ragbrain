@@ -118,6 +118,62 @@ export interface GraphResponse {
   };
 }
 
+// ============ Galaxy Graph (LOD-based) ============
+
+// LOD 0: Galaxy Overview — theme bubbles + affinities
+export interface GalaxyTheme {
+  id: string;
+  label: string;
+  description: string;
+  color: string;
+  count: number;
+  recentCount: number; // thoughts in last 7 days
+  topTags: string[];
+  sampleThoughts: { id: string; text: string }[];
+}
+
+export interface ThemeAffinity {
+  source: string; // theme ID
+  target: string; // theme ID
+  strength: number; // mean cosine similarity between themes
+  volume: number;   // count of cross-theme edges above threshold
+}
+
+export interface GalaxyOverview {
+  level: 0;
+  themes: GalaxyTheme[];
+  affinities: ThemeAffinity[];
+  metadata: {
+    totalThoughts: number;
+    generatedAt: string;
+  };
+}
+
+// LOD 1: Constellation — thoughts within a theme
+export interface ConstellationNode {
+  id: string;
+  text: string;
+  type: string;
+  tags: string[];
+  importance: number; // 0-1
+  recency: number;    // 0-1
+}
+
+export interface ConstellationEdge {
+  source: string;
+  target: string;
+  similarity: number;
+}
+
+export interface ConstellationView {
+  level: 1;
+  themeId: string;
+  themeLabel: string;
+  themeColor: string;
+  thoughts: ConstellationNode[];
+  edges: ConstellationEdge[];
+}
+
 // Error response
 export interface ErrorResponse {
   error: string;

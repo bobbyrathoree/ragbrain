@@ -13,6 +13,12 @@ import {
   GraphNode,
   GraphEdge,
   GraphTheme,
+  GalaxyOverview,
+  GalaxyTheme,
+  ThemeAffinity,
+  ConstellationView,
+  ConstellationNode,
+  ConstellationEdge,
 } from '@ragbrain/shared';
 
 const s3 = new S3Client({});
@@ -459,6 +465,356 @@ function buildEdges(
   return filteredEdges;
 }
 
+// ============ LOD: Galaxy Overview (LOD 0) ============
+
+function computeThemeAffinities(
+  thoughts: ThoughtWithEmbedding[],
+  clusterMap: Map<number, string[]>,
+  thoughtsById: Map<string, ThoughtWithEmbedding>,
+): ThemeAffinity[] {
+  const clusterIds = Array.from(clusterMap.keys());
+  const affinities: ThemeAffinity[] = [];
+
+  for (let i = 0; i < clusterIds.length; i++) {
+    for (let j = i + 1; j < clusterIds.length; j++) {
+      const idsA = clusterMap.get(clusterIds[i])!;
+      const idsB = clusterMap.get(clusterIds[j])!;
+
+      // Compute mean cosine similarity between clusters (sample for speed)
+      const sampleA = idsA.slice(0, 50).map(id => thoughtsById.get(id)).filter(Boolean) as ThoughtWithEmbedding[];
+      const sampleB = idsB.slice(0, 50).map(id => thoughtsById.get(id)).filter(Boolean) as ThoughtWithEmbedding[];
+
+      let totalSim = 0;
+      let crossEdges = 0;
+      let comparisons = 0;
+
+      for (const a of sampleA) {
+        for (const b of sampleB) {
+          const sim = cosineSimilarity(a.embedding, b.embedding);
+          totalSim += sim;
+          comparisons++;
+          if (sim >= 0.5) crossEdges++;
+        }
+      }
+
+      const strength = comparisons > 0 ? totalSim / comparisons : 0;
+      // Scale volume: estimate from sample
+      const volumeScale = (idsA.length * idsB.length) / (sampleA.length * sampleB.length);
+      const volume = Math.round(crossEdges * volumeScale);
+
+      if (strength > 0.1 || volume > 0) {
+        affinities.push({
+          source: `theme-${clusterIds[i]}`,
+          target: `theme-${clusterIds[j]}`,
+          strength: Number(strength.toFixed(3)),
+          volume,
+        });
+      }
+    }
+  }
+
+  return affinities;
+}
+
+function buildGalaxyOverview(
+  themes: GraphTheme[],
+  affinities: ThemeAffinity[],
+  totalThoughts: number,
+): GalaxyOverview {
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+  return {
+    level: 0,
+    themes: themes.map(t => ({
+      id: t.id,
+      label: t.label,
+      description: t.description,
+      color: t.color,
+      count: t.count,
+      recentCount: 0, // computed below when we have thought timestamps
+      topTags: [],     // computed below
+      sampleThoughts: t.sampleThoughts,
+    })),
+    affinities,
+    metadata: {
+      totalThoughts,
+      generatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+// ============ LOD: Constellation View (LOD 1) ============
+
+function buildEdgesWithKNN(
+  thoughts: ThoughtWithEmbedding[],
+  minSimilarity: number = 0.4,
+  kNearest: number = 3,
+  maxEdgesPerNode: number = 5,
+): ConstellationEdge[] {
+  const edges: ConstellationEdge[] = [];
+  const knnEdges = new Map<string, { target: string; similarity: number }[]>();
+
+  // Compute all pairwise similarities and track k-NN
+  for (let i = 0; i < thoughts.length; i++) {
+    const neighbors: { target: string; similarity: number }[] = [];
+    for (let j = 0; j < thoughts.length; j++) {
+      if (i === j) continue;
+      const sim = cosineSimilarity(thoughts[i].embedding, thoughts[j].embedding);
+      neighbors.push({ target: thoughts[j].id, similarity: sim });
+    }
+    neighbors.sort((a, b) => b.similarity - a.similarity);
+    knnEdges.set(thoughts[i].id, neighbors.slice(0, kNearest));
+  }
+
+  // Collect edges: k-NN guaranteed + threshold-based
+  const edgeSet = new Set<string>();
+  const addEdge = (src: string, tgt: string, sim: number) => {
+    const key = src < tgt ? `${src}-${tgt}` : `${tgt}-${src}`;
+    if (!edgeSet.has(key)) {
+      edgeSet.add(key);
+      edges.push({ source: src, target: tgt, similarity: Number(sim.toFixed(3)) });
+    }
+  };
+
+  // Add k-NN edges (guaranteed connectivity)
+  for (const [srcId, neighbors] of knnEdges) {
+    for (const { target, similarity } of neighbors) {
+      addEdge(srcId, target, similarity);
+    }
+  }
+
+  // Add threshold-based edges
+  for (let i = 0; i < thoughts.length; i++) {
+    for (let j = i + 1; j < thoughts.length; j++) {
+      const sim = cosineSimilarity(thoughts[i].embedding, thoughts[j].embedding);
+      if (sim >= minSimilarity) {
+        addEdge(thoughts[i].id, thoughts[j].id, sim);
+      }
+    }
+  }
+
+  // Limit edges per node
+  const edgeCountPerNode = new Map<string, number>();
+  const filtered: ConstellationEdge[] = [];
+  edges.sort((a, b) => b.similarity - a.similarity);
+
+  for (const edge of edges) {
+    const sc = edgeCountPerNode.get(edge.source) || 0;
+    const tc = edgeCountPerNode.get(edge.target) || 0;
+    if (sc < maxEdgesPerNode && tc < maxEdgesPerNode) {
+      filtered.push(edge);
+      edgeCountPerNode.set(edge.source, sc + 1);
+      edgeCountPerNode.set(edge.target, tc + 1);
+    }
+  }
+
+  return filtered;
+}
+
+function buildConstellationView(
+  themeId: string,
+  themeLabel: string,
+  themeColor: string,
+  thoughts: ThoughtWithEmbedding[],
+): ConstellationView {
+  const now = Date.now();
+  const maxAge = 365 * 24 * 60 * 60 * 1000;
+
+  // Sort by importance + recency, cap at 500
+  const sorted = [...thoughts].sort((a, b) => {
+    const scoreA = a.decisionScore + Math.max(0, 1 - (now - a.createdAt) / maxAge);
+    const scoreB = b.decisionScore + Math.max(0, 1 - (now - b.createdAt) / maxAge);
+    return scoreB - scoreA;
+  });
+  const capped = sorted.slice(0, 500);
+
+  const nodes: ConstellationNode[] = capped.map(t => ({
+    id: t.id,
+    text: truncateText(t.text, 80),
+    type: t.type,
+    tags: t.tags,
+    importance: t.decisionScore,
+    recency: Math.max(0, 1 - (now - t.createdAt) / maxAge),
+  }));
+
+  const edges = buildEdgesWithKNN(capped, 0.4, 3, 5);
+
+  return {
+    level: 1,
+    themeId,
+    themeLabel,
+    themeColor,
+    thoughts: nodes,
+    edges,
+  };
+}
+
+// ============ LOD Request Handler ============
+
+async function handleLODRequest(
+  user: string,
+  level: 'overview' | 'theme',
+  themeId: string | undefined,
+  startTime: number,
+): Promise<APIGatewayProxyResultV2> {
+  const cacheKey = level === 'overview'
+    ? `graph/${user}/overview-v3.json`
+    : `graph/${user}/theme-${themeId}-v3.json`;
+
+  // Check cache
+  let lastDataChange = 0;
+  try {
+    const metaResult = await dynamodb.send(new GetItemCommand({
+      TableName: TABLE_NAME,
+      Key: { pk: { S: `user#${user}` }, sk: { S: 'meta' } },
+      ProjectionExpression: 'lastDataChange',
+    }));
+    lastDataChange = metaResult.Item?.lastDataChange?.N ? parseInt(metaResult.Item.lastDataChange.N) : 0;
+  } catch {}
+
+  try {
+    const cached = await s3.send(new GetObjectCommand({
+      Bucket: GRAPH_BUCKET || BUCKET_NAME,
+      Key: cacheKey,
+    }));
+    const cacheAge = Date.now() - (cached.LastModified?.getTime() || 0);
+    if (cacheAge < 3600000 && (cached.LastModified?.getTime() || 0) > lastDataChange) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json', 'X-Cache': 'HIT' },
+        body: await cached.Body!.transformToString(),
+      };
+    }
+  } catch {}
+
+  // Fetch thoughts and cluster
+  const thoughts = await fetchThoughtsWithEmbeddings(user);
+  if (thoughts.length === 0) {
+    const empty = level === 'overview'
+      ? { level: 0, themes: [], affinities: [], metadata: { totalThoughts: 0, generatedAt: new Date().toISOString() } }
+      : { level: 1, themeId: themeId || '', themeLabel: '', themeColor: '', thoughts: [], edges: [] };
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(empty) };
+  }
+
+  const k = calculateOptimalK(thoughts.length);
+  const clusterMap = kMeansClustering(thoughts, k);
+  const thoughtsById = new Map(thoughts.map(t => [t.id, t]));
+
+  // Build cluster → theme mapping
+  const thoughtToCluster = new Map<string, number>();
+  for (const [clusterId, thoughtIds] of clusterMap) {
+    for (const id of thoughtIds) thoughtToCluster.set(id, clusterId);
+  }
+
+  // Generate theme labels
+  let colorIndex = 0;
+  const themePromises: Promise<{ clusterId: number; theme: GraphTheme }>[] = [];
+  for (const [clusterId, thoughtIds] of clusterMap) {
+    const clusterThoughts = thoughtIds.map(id => thoughtsById.get(id)).filter(Boolean) as ThoughtWithEmbedding[];
+    const sampleTexts = clusterThoughts.slice(0, 10).map(t => truncateText(t.text, 200));
+    const color = THEME_COLORS[colorIndex++ % THEME_COLORS.length];
+
+    themePromises.push(
+      generateThemeLabel(sampleTexts).then(({ label, description }) => ({
+        clusterId,
+        theme: {
+          id: `theme-${clusterId}`,
+          label, description, color,
+          count: thoughtIds.length,
+          sampleThoughts: clusterThoughts.slice(0, 5).map(t => ({ id: t.id, text: truncateText(t.text, 100) })),
+        },
+      }))
+    );
+  }
+  const themeResults = await Promise.all(themePromises);
+  const themes = themeResults.map(r => r.theme);
+  const clusterToTheme = new Map(themeResults.map(r => [r.clusterId, r.theme]));
+
+  let responseBody: string;
+
+  if (level === 'overview') {
+    // Compute affinities
+    const affinities = computeThemeAffinities(thoughts, clusterMap, thoughtsById);
+
+    // Enrich themes with recentCount and topTags
+    const now = Date.now();
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const galaxyThemes: GalaxyTheme[] = themes.map(t => {
+      const clusterId = parseInt(t.id.replace('theme-', ''));
+      const thoughtIds = clusterMap.get(clusterId) || [];
+      const clusterThoughts = thoughtIds.map(id => thoughtsById.get(id)).filter(Boolean) as ThoughtWithEmbedding[];
+
+      const recentCount = clusterThoughts.filter(ct => ct.createdAt > sevenDaysAgo).length;
+      const tagCounts = new Map<string, number>();
+      clusterThoughts.forEach(ct => ct.tags.forEach(tag => tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1)));
+      const topTags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([tag]) => tag);
+
+      return {
+        id: t.id, label: t.label, description: t.description, color: t.color,
+        count: t.count, recentCount, topTags,
+        sampleThoughts: t.sampleThoughts,
+      };
+    });
+
+    const overview: GalaxyOverview = {
+      level: 0,
+      themes: galaxyThemes,
+      affinities,
+      metadata: { totalThoughts: thoughts.length, generatedAt: new Date().toISOString() },
+    };
+    responseBody = JSON.stringify(overview);
+
+  } else {
+    // level === 'theme'
+    if (!themeId) {
+      return { statusCode: 400, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'themeId is required' }) };
+    }
+
+    const clusterId = parseInt(themeId.replace('theme-', ''));
+    const thoughtIds = clusterMap.get(clusterId);
+    if (!thoughtIds) {
+      return { statusCode: 404, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Theme not found' }) };
+    }
+
+    const clusterThoughts = thoughtIds.map(id => thoughtsById.get(id)).filter(Boolean) as ThoughtWithEmbedding[];
+    const theme = clusterToTheme.get(clusterId);
+
+    const constellation = buildConstellationView(
+      themeId,
+      theme?.label || 'Unknown',
+      theme?.color || '#888888',
+      clusterThoughts,
+    );
+    responseBody = JSON.stringify(constellation);
+  }
+
+  // Cache
+  await s3.send(new PutObjectCommand({
+    Bucket: GRAPH_BUCKET || BUCKET_NAME,
+    Key: cacheKey,
+    Body: responseBody,
+    ContentType: 'application/json',
+  })).catch(err => console.error('Failed to cache:', err));
+
+  // Metrics
+  await cloudwatch.send(new PutMetricDataCommand({
+    Namespace: PROJECT_NAME,
+    MetricData: [{
+      MetricName: 'GraphGenerationLatency',
+      Value: Date.now() - startTime,
+      Unit: 'Milliseconds',
+      Dimensions: [{ Name: 'Environment', Value: ENVIRONMENT }, { Name: 'Level', Value: level }],
+    }],
+  })).catch(() => {});
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json', 'X-Cache': 'MISS' },
+    body: responseBody,
+  };
+}
+
 // ============ Main Handler ============
 
 export const handler = async (
@@ -467,13 +823,6 @@ export const handler = async (
   const startTime = Date.now();
 
   try {
-    const params: GraphRequest = {
-      month: event.queryStringParameters?.month,
-      minSimilarity: event.queryStringParameters?.minSimilarity
-        ? parseFloat(event.queryStringParameters.minSimilarity)
-        : 0.7,
-    };
-
     const user = event.requestContext.authorizer?.lambda?.user;
     if (!user) {
       console.error('CRITICAL: User context missing from authorizer');
@@ -486,6 +835,22 @@ export const handler = async (
         }),
       };
     }
+
+    const level = event.queryStringParameters?.level;
+    const themeIdParam = event.queryStringParameters?.themeId;
+
+    // LOD routing: overview, theme, or legacy (default)
+    if (level === 'overview' || level === 'theme') {
+      return handleLODRequest(user, level, themeIdParam, startTime);
+    }
+
+    // Legacy path (backward compat)
+    const params: GraphRequest = {
+      month: event.queryStringParameters?.month,
+      minSimilarity: event.queryStringParameters?.minSimilarity
+        ? parseFloat(event.queryStringParameters.minSimilarity)
+        : 0.7,
+    };
 
     const cacheKey = `graph/${user}/${params.month || 'all'}-v2.json`;
 

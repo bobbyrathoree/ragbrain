@@ -152,4 +152,4 @@ Desktop.ini
 
 # Keep these
 !.gitkeep
-!.github/
+!.github/.superpowers/

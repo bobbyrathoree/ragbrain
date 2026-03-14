@@ -13,6 +13,12 @@ import type {
   GraphTheme as SharedGraphTheme,
   ConversationSummary as SharedConvSummary,
   ConversationMessage as SharedConvMessage,
+  GalaxyOverview as SharedGalaxyOverview,
+  GalaxyTheme as SharedGalaxyTheme,
+  ThemeAffinity as SharedThemeAffinity,
+  ConstellationView as SharedConstellationView,
+  ConstellationNode as SharedConstellationNode,
+  ConstellationEdge as SharedConstellationEdge,
 } from '@ragbrain/shared'
 
 // Re-export core types
@@ -22,6 +28,14 @@ export type GraphEdge = SharedGraphEdge
 export type GraphTheme = SharedGraphTheme
 export type ConversationSummary = SharedConvSummary
 export type ConversationMessage = SharedConvMessage
+
+// Galaxy graph types (LOD-based)
+export type GalaxyOverview = SharedGalaxyOverview
+export type GalaxyTheme = SharedGalaxyTheme
+export type ThemeAffinity = SharedThemeAffinity
+export type ConstellationView = SharedConstellationView
+export type ConstellationNode = SharedConstellationNode
+export type ConstellationEdge = SharedConstellationEdge
 
 // Re-export the const for runtime usage (type detection list)
 export { ThoughtType as ThoughtTypeValues } from '@ragbrain/shared'
@@ -46,13 +60,8 @@ export interface AskResponse {
   processingTime: number
 }
 
-// GraphNode extended with D3 force simulation properties
-export interface GraphNode extends SharedGraphNode {
-  vx?: number
-  vy?: number
-  fx?: number | null
-  fy?: number | null
-}
+// Legacy GraphNode (backward compat with old graph view)
+export type GraphNode = SharedGraphNode
 
 // Frontend search types
 export interface SearchResult {
