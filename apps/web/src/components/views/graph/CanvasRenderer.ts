@@ -1,44 +1,16 @@
 /**
  * Canvas 2D renderer for the knowledge galaxy.
- * Handles two modes: Galaxy (theme bubbles + affinities) and Constellation (thought nodes + edges).
- * No Vue dependency — pure rendering class.
+ * Galaxy mode: theme bubbles + affinity rivers
+ * Constellation mode: thought nodes with glassmorphism, edges, tag pills, glow effects
  */
 import * as d3 from 'd3'
 import type { GalaxyTheme, ThemeAffinity, ConstellationNode, ConstellationEdge } from '@/types'
 
-// ── Types ───────────────────────────────────────────────────────
+// ── Constants ───────────────────────────────────────────────────
 
-interface Viewport {
-  width: number
-  height: number
-  dpr: number
-}
-
-export interface GalaxyBubble extends GalaxyTheme {
-  x: number
-  y: number
-  radius: number
-  // D3 simulation
-  vx?: number
-  vy?: number
-}
-
-export interface ConstellationNodePos extends ConstellationNode {
-  x: number
-  y: number
-  width: number
-  height: number
-  vx?: number
-  vy?: number
-}
-
-export interface HitResult {
-  type: 'bubble' | 'node'
-  id: string
-  data: GalaxyBubble | ConstellationNodePos
-}
-
-// ── Color Helpers ───────────────────────────────────────────────
+const NODE_W = 230
+const NODE_H = 82
+const NODE_R = 8
 
 const TYPE_COLORS: Record<string, string> = {
   thought: '#a8a29e',
@@ -48,6 +20,28 @@ const TYPE_COLORS: Record<string, string> = {
   todo: '#fbbf24',
   link: '#fb7185',
 }
+
+// ── Types ───────────────────────────────────────────────────────
+
+interface Viewport { width: number; height: number; dpr: number }
+
+export interface GalaxyBubble extends GalaxyTheme {
+  x: number; y: number; radius: number
+  vx?: number; vy?: number
+}
+
+export interface ConstellationNodePos extends ConstellationNode {
+  x: number; y: number; width: number; height: number
+  vx?: number; vy?: number
+}
+
+export interface HitResult {
+  type: 'bubble' | 'node'
+  id: string
+  data: GalaxyBubble | ConstellationNodePos
+}
+
+// ── Helpers ─────────────────────────────────────────────────────
 
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16)
@@ -59,11 +53,48 @@ function hexToRgba(hex: string, alpha: number): string {
 function blendColors(c1: string, c2: string, alpha: number): string {
   const r1 = parseInt(c1.slice(1, 3), 16), g1 = parseInt(c1.slice(3, 5), 16), b1 = parseInt(c1.slice(5, 7), 16)
   const r2 = parseInt(c2.slice(1, 3), 16), g2 = parseInt(c2.slice(3, 5), 16), b2 = parseInt(c2.slice(5, 7), 16)
-  const r = Math.round((r1 + r2) / 2), g = Math.round((g1 + g2) / 2), b = Math.round((b1 + b2) / 2)
-  return `rgba(${r},${g},${b},${alpha})`
+  return `rgba(${Math.round((r1+r2)/2)},${Math.round((g1+g2)/2)},${Math.round((b1+b2)/2)},${alpha})`
 }
 
-// ── Renderer Class ──────────────────────────────────────────────
+/** Generate heuristic edges from shared tags + type similarity when backend returns none */
+export function generateHeuristicEdges(nodes: ConstellationNode[]): ConstellationEdge[] {
+  const edges: ConstellationEdge[] = []
+  const edgeSet = new Set<string>()
+  const K = 3
+
+  for (let i = 0; i < nodes.length; i++) {
+    const candidates: { idx: number; score: number }[] = []
+    for (let j = 0; j < nodes.length; j++) {
+      if (i === j) continue
+      let score = 0
+      // Shared tags (strongest signal)
+      const commonTags = nodes[i].tags.filter(t => nodes[j].tags.includes(t))
+      score += commonTags.length * 5
+      // Same type
+      if (nodes[i].type === nodes[j].type) score += 1
+      // Similar importance
+      score += (1 - Math.abs(nodes[i].importance - nodes[j].importance)) * 0.5
+      candidates.push({ idx: j, score })
+    }
+    // k-NN: every node connects to its top K neighbors
+    candidates.sort((a, b) => b.score - a.score)
+    for (const c of candidates.slice(0, K)) {
+      if (c.score <= 0) continue
+      const key = Math.min(i, c.idx) + '-' + Math.max(i, c.idx)
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key)
+        edges.push({
+          source: nodes[i].id,
+          target: nodes[c.idx].id,
+          similarity: Math.min(1, c.score / 10),
+        })
+      }
+    }
+  }
+  return edges
+}
+
+// ── Renderer ────────────────────────────────────────────────────
 
 export class CanvasRenderer {
   private canvas: HTMLCanvasElement
@@ -72,12 +103,12 @@ export class CanvasRenderer {
   private animationId = 0
   private time = 0
 
-  // Galaxy state
+  // Galaxy
   private bubbles: GalaxyBubble[] = []
   private affinities: ThemeAffinity[] = []
   private galaxySim: d3.Simulation<GalaxyBubble, undefined> | null = null
 
-  // Constellation state
+  // Constellation
   private nodes: ConstellationNodePos[] = []
   private edges: ConstellationEdge[] = []
   private constellationSim: d3.Simulation<ConstellationNodePos, undefined> | null = null
@@ -89,19 +120,15 @@ export class CanvasRenderer {
   private mouseY = 0
 
   // Transition
-  private transitionProgress = 0 // 0 = galaxy, 1 = constellation
+  private transitionProgress = 0
   private transitionTarget = 0
-  // @ts-ignore used in future transition refinement
-  private _transitionBubbleId: string | null = null
 
-  // Callbacks
   onHover: ((hit: HitResult | null) => void) | null = null
   onClick: ((hit: HitResult | null) => void) | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')!
-
     canvas.addEventListener('mousemove', this.handleMouseMove)
     canvas.addEventListener('click', this.handleClick)
   }
@@ -131,30 +158,22 @@ export class CanvasRenderer {
     const cx = this.viewport.width / 2
     const cy = this.viewport.height / 2
 
-    // Create bubbles with radius proportional to sqrt(count)
     const maxCount = Math.max(...themes.map(t => t.count), 1)
-    const minRadius = 40
-    const maxRadius = Math.min(this.viewport.width, this.viewport.height) * 0.15
+    const minR = 50, maxR = Math.min(this.viewport.width, this.viewport.height) * 0.18
 
     this.bubbles = themes.map((t, i) => {
-      const radius = minRadius + (Math.sqrt(t.count / maxCount)) * (maxRadius - minRadius)
-      const angle = (i / themes.length) * Math.PI * 2
-      const spread = Math.min(this.viewport.width, this.viewport.height) * 0.2
-      return {
-        ...t,
-        x: cx + Math.cos(angle) * spread,
-        y: cy + Math.sin(angle) * spread,
-        radius,
-      }
+      const radius = minR + Math.sqrt(t.count / maxCount) * (maxR - minR)
+      const angle = (i / themes.length) * Math.PI * 2 - Math.PI / 2
+      const spread = Math.min(this.viewport.width, this.viewport.height) * 0.18
+      return { ...t, x: cx + Math.cos(angle) * spread, y: cy + Math.sin(angle) * spread, radius }
     })
 
-    // D3 force simulation for bubble positioning
     this.galaxySim?.stop()
     this.galaxySim = d3.forceSimulation(this.bubbles)
-      .force('center', d3.forceCenter(cx, cy).strength(0.05))
-      .force('charge', d3.forceManyBody().strength(-200))
-      .force('collide', d3.forceCollide<GalaxyBubble>().radius(d => d.radius + 20).strength(0.8))
-      .alphaDecay(0.08)
+      .force('center', d3.forceCenter(cx, cy).strength(0.08))
+      .force('charge', d3.forceManyBody().strength(-300))
+      .force('collide', d3.forceCollide<GalaxyBubble>().radius(d => d.radius + 30).strength(0.9))
+      .alphaDecay(0.06)
       .on('tick', () => {})
 
     this.transitionProgress = 0
@@ -165,40 +184,41 @@ export class CanvasRenderer {
   // ── Constellation Mode ──────────────────────────────────────
 
   setConstellationData(thoughts: ConstellationNode[], edges: ConstellationEdge[], color: string) {
-    this.edges = edges
+    // If no edges from backend, generate heuristic edges
+    this.edges = edges.length > 0 ? edges : generateHeuristicEdges(thoughts)
     this.constellationColor = color
     const cx = this.viewport.width / 2
     const cy = this.viewport.height / 2
 
-    // Create positioned nodes
     this.nodes = thoughts.map(t => ({
       ...t,
-      x: cx + (Math.random() - 0.5) * 100,
-      y: cy + (Math.random() - 0.5) * 100,
-      width: Math.min(180, Math.max(120, t.text.length * 3.5)),
-      height: 38,
+      x: cx + (Math.random() - 0.5) * 120,
+      y: cy + (Math.random() - 0.5) * 120,
+      width: NODE_W,
+      height: NODE_H,
     }))
 
-    // Build D3 links
+    // Build D3 links from edges
     const nodeMap = new Map(this.nodes.map((n, i) => [n.id, i]))
-    const links = edges
-      .map(e => ({ source: nodeMap.get(e.source)!, target: nodeMap.get(e.target)!, similarity: e.similarity }))
+    const links = this.edges
+      .map(e => ({ source: nodeMap.get(e.source)!, target: nodeMap.get(e.target)!, value: e.similarity }))
       .filter(l => l.source !== undefined && l.target !== undefined)
 
     this.constellationSim?.stop()
     this.constellationSim = d3.forceSimulation(this.nodes)
-      .force('center', d3.forceCenter(cx, cy).strength(0.03))
-      .force('charge', d3.forceManyBody().strength(-120))
-      .force('link', d3.forceLink(links).distance(80).strength(0.3))
-      .force('collide', d3.forceCollide<ConstellationNodePos>().radius(d => d.width / 2 + 10).strength(0.7))
-      .alphaDecay(0.04)
+      .force('center', d3.forceCenter(cx, cy).strength(0.15))
+      .force('charge', d3.forceManyBody().strength(-250))
+      .force('link', d3.forceLink(links).distance(100).strength(0.6))
+      .force('collide', d3.forceCollide<ConstellationNodePos>().radius(d => Math.max(d.width, d.height) / 2 + 12).strength(0.85))
+      .force('x', d3.forceX(cx).strength(0.08))
+      .force('y', d3.forceY(cy).strength(0.08))
+      .alphaDecay(0.025)
       .on('tick', () => {})
   }
 
   // ── Transitions ─────────────────────────────────────────────
 
-  transitionToConstellation(bubbleId: string) {
-    this._transitionBubbleId = bubbleId
+  transitionToConstellation(_bubbleId: string) {
     this.transitionTarget = 1
     this.galaxySim?.stop()
   }
@@ -206,10 +226,7 @@ export class CanvasRenderer {
   transitionToGalaxy() {
     this.transitionTarget = 0
     this.constellationSim?.stop()
-    // Restart galaxy sim gently
-    if (this.galaxySim) {
-      this.galaxySim.alpha(0.3).restart()
-    }
+    this.galaxySim?.alpha(0.3).restart()
   }
 
   // ── Animation Loop ──────────────────────────────────────────
@@ -218,36 +235,31 @@ export class CanvasRenderer {
     const animate = () => {
       this.animationId = requestAnimationFrame(animate)
       this.time = performance.now() * 0.001
-      this.update()
+
+      // Smooth transition (ease in-out)
+      const speed = 0.05
+      if (this.transitionProgress < this.transitionTarget) {
+        this.transitionProgress = Math.min(this.transitionProgress + speed, 1)
+      } else if (this.transitionProgress > this.transitionTarget) {
+        this.transitionProgress = Math.max(this.transitionProgress - speed, 0)
+      }
+
       this.draw()
     }
     animate()
   }
 
-  private update() {
-    // Smooth transition
-    const speed = 0.04
-    if (this.transitionProgress < this.transitionTarget) {
-      this.transitionProgress = Math.min(this.transitionProgress + speed, 1)
-    } else if (this.transitionProgress > this.transitionTarget) {
-      this.transitionProgress = Math.max(this.transitionProgress - speed, 0)
-    }
-  }
-
   private draw() {
-    const { ctx, viewport } = this
-    const { width, height } = viewport
+    const { ctx, viewport: { width, height } } = this
 
-    // Clear
-    ctx.fillStyle = '#0a0a0f'
+    ctx.fillStyle = '#08080c'
     ctx.fillRect(0, 0, width, height)
 
     if (this.transitionProgress < 0.5) {
       this.drawGalaxy(1 - this.transitionProgress * 2)
     }
     if (this.transitionProgress > 0.3) {
-      const alpha = Math.min(1, (this.transitionProgress - 0.3) / 0.7)
-      this.drawConstellation(alpha)
+      this.drawConstellation(Math.min(1, (this.transitionProgress - 0.3) / 0.7))
     }
   }
 
@@ -255,73 +267,81 @@ export class CanvasRenderer {
 
   private drawGalaxy(opacity: number) {
     const { ctx } = this
-
+    ctx.save()
     ctx.globalAlpha = opacity
 
-    // Draw affinity rivers first (behind bubbles)
+    // Affinity rivers
     for (const aff of this.affinities) {
       const src = this.bubbles.find(b => b.id === aff.source)
       const tgt = this.bubbles.find(b => b.id === aff.target)
       if (!src || !tgt) continue
-
-      const lineWidth = Math.max(1, Math.min(8, aff.volume * 0.5))
-      const lineAlpha = Math.max(0.05, Math.min(0.3, aff.strength * 0.5))
-
+      const lw = Math.max(1.5, Math.min(10, aff.volume * 0.6))
+      const la = Math.max(0.06, Math.min(0.35, aff.strength * 0.5))
       ctx.beginPath()
-      // Quadratic bezier curve
-      const mx = (src.x + tgt.x) / 2
-      const my = (src.y + tgt.y) / 2 - 30
+      const mx = (src.x + tgt.x) / 2, my = (src.y + tgt.y) / 2 - 40
       ctx.moveTo(src.x, src.y)
       ctx.quadraticCurveTo(mx, my, tgt.x, tgt.y)
-      ctx.strokeStyle = blendColors(src.color, tgt.color, lineAlpha)
-      ctx.lineWidth = lineWidth
+      ctx.strokeStyle = blendColors(src.color, tgt.color, la)
+      ctx.lineWidth = lw
       ctx.stroke()
     }
 
-    // Draw bubbles — batch by color for perf
+    // Bubbles
     for (const bubble of this.bubbles) {
       const isHovered = this.hoveredId === bubble.id
-      const breathe = 1 + Math.sin(this.time * 0.8 + this.bubbles.indexOf(bubble) * 1.5) * 0.02
-      const r = bubble.radius * breathe * (isHovered ? 1.08 : 1)
+      const breathe = 1 + Math.sin(this.time * 0.7 + this.bubbles.indexOf(bubble) * 1.8) * 0.025
+      const r = bubble.radius * breathe * (isHovered ? 1.1 : 1)
 
-      // Glow
+      // Outer glow
+      if (isHovered) {
+        ctx.shadowBlur = 30
+        ctx.shadowColor = hexToRgba(bubble.color, 0.4)
+      }
+
+      // Glow ring
       ctx.beginPath()
-      ctx.arc(bubble.x, bubble.y, r + 8, 0, Math.PI * 2)
-      ctx.fillStyle = hexToRgba(bubble.color, 0.06)
+      ctx.arc(bubble.x, bubble.y, r + 12, 0, Math.PI * 2)
+      ctx.fillStyle = hexToRgba(bubble.color, 0.04)
       ctx.fill()
 
       // Main circle
       ctx.beginPath()
       ctx.arc(bubble.x, bubble.y, r, 0, Math.PI * 2)
-      ctx.fillStyle = hexToRgba(bubble.color, isHovered ? 0.25 : 0.15)
+      ctx.fillStyle = hexToRgba(bubble.color, isHovered ? 0.28 : 0.16)
       ctx.fill()
-      ctx.strokeStyle = hexToRgba(bubble.color, isHovered ? 0.6 : 0.35)
-      ctx.lineWidth = isHovered ? 2 : 1
+      ctx.strokeStyle = hexToRgba(bubble.color, isHovered ? 0.7 : 0.4)
+      ctx.lineWidth = isHovered ? 2.5 : 1.5
       ctx.stroke()
 
-      // Count text (large, centered)
-      ctx.fillStyle = hexToRgba(bubble.color, 0.9)
-      ctx.font = `bold ${Math.max(16, r * 0.4)}px system-ui, -apple-system, sans-serif`
+      ctx.shadowBlur = 0
+
+      // Count
+      ctx.fillStyle = hexToRgba(bubble.color, 0.95)
+      ctx.font = `bold ${Math.max(20, r * 0.45)}px "Inter", system-ui, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(String(bubble.count), bubble.x, bubble.y)
+      ctx.fillText(String(bubble.count), bubble.x, bubble.y - 4)
 
-      // Label below bubble
-      ctx.fillStyle = 'rgba(255,255,255,0.85)'
-      ctx.font = '13px system-ui, -apple-system, sans-serif'
+      // "thoughts" subtitle
+      ctx.fillStyle = hexToRgba(bubble.color, 0.5)
+      ctx.font = '10px system-ui, sans-serif'
+      ctx.fillText('thoughts', bubble.x, bubble.y + r * 0.3)
+
+      // Label below
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.font = `600 14px "Inter", system-ui, sans-serif`
       ctx.textBaseline = 'top'
-      ctx.fillText(bubble.label, bubble.x, bubble.y + r + 12)
+      ctx.fillText(bubble.label, bubble.x, bubble.y + r + 14)
 
-      // Recent count badge
+      // Recent badge
       if (bubble.recentCount > 0) {
-        const badgeText = `+${bubble.recentCount} this week`
-        ctx.fillStyle = hexToRgba(bubble.color, 0.6)
-        ctx.font = '10px system-ui, -apple-system, sans-serif'
-        ctx.fillText(badgeText, bubble.x, bubble.y + r + 28)
+        ctx.fillStyle = hexToRgba(bubble.color, 0.55)
+        ctx.font = '10px system-ui, sans-serif'
+        ctx.fillText(`+${bubble.recentCount} this week`, bubble.x, bubble.y + r + 34)
       }
     }
 
-    ctx.globalAlpha = 1
+    ctx.restore()
   }
 
   // ── Constellation Drawing ───────────────────────────────────
@@ -329,100 +349,157 @@ export class CanvasRenderer {
   private drawConstellation(opacity: number) {
     const { ctx } = this
 
-    // Faint theme-colored background tint
-    ctx.fillStyle = hexToRgba(this.constellationColor, 0.03 * opacity)
+    // Theme tint
+    ctx.fillStyle = hexToRgba(this.constellationColor, 0.02 * opacity)
     ctx.fillRect(0, 0, this.viewport.width, this.viewport.height)
 
-    ctx.globalAlpha = opacity
-
-    // Draw edges first
-    const connectedToHovered = new Set<string>()
+    // Build connected set for hover
+    const connected = new Set<string>()
     if (this.hoveredId) {
+      connected.add(this.hoveredId)
       for (const e of this.edges) {
-        if (e.source === this.hoveredId) connectedToHovered.add(e.target)
-        if (e.target === this.hoveredId) connectedToHovered.add(e.source)
+        if (e.source === this.hoveredId) connected.add(e.target)
+        if (e.target === this.hoveredId) connected.add(e.source)
       }
-      connectedToHovered.add(this.hoveredId)
     }
 
+    ctx.save()
+    ctx.globalAlpha = opacity
+
+    // ── Edges ──
     for (const edge of this.edges) {
       const src = this.nodes.find(n => n.id === edge.source)
       const tgt = this.nodes.find(n => n.id === edge.target)
       if (!src || !tgt) continue
 
-      const isConnected = !this.hoveredId || connectedToHovered.has(edge.source) && connectedToHovered.has(edge.target)
-      const edgeAlpha = isConnected ? Math.max(0.15, edge.similarity * 0.4) : 0.03
-      const edgeWidth = isConnected ? Math.max(0.5, edge.similarity * 2) : 0.5
+      const isLit = !this.hoveredId || (connected.has(edge.source) && connected.has(edge.target))
+      const ea = isLit ? Math.max(0.12, edge.similarity * 0.5) : 0.03
+      const ew = isLit ? Math.max(1, edge.similarity * 3) : 0.4
 
       ctx.beginPath()
       ctx.moveTo(src.x, src.y)
       ctx.lineTo(tgt.x, tgt.y)
-      ctx.strokeStyle = `rgba(255,255,255,${edgeAlpha})`
-      ctx.lineWidth = edgeWidth
+      ctx.strokeStyle = isLit
+        ? hexToRgba(this.constellationColor, ea)
+        : 'rgba(255,255,255,0.03)'
+      ctx.lineWidth = ew
       ctx.stroke()
     }
 
-    // Draw nodes — batch by type color
+    // ── Nodes ──
     for (const node of this.nodes) {
       const isHovered = this.hoveredId === node.id
-      const isConnected = !this.hoveredId || connectedToHovered.has(node.id)
-      const nodeAlpha = isConnected ? 1 : 0.2
+      const isLit = !this.hoveredId || connected.has(node.id)
       const typeColor = TYPE_COLORS[node.type] || '#a8a29e'
 
-      const x = node.x - node.width / 2
-      const y = node.y - node.height / 2
-      const w = node.width
-      const h = node.height
-      const r = 6
+      const x = node.x - NODE_W / 2
+      const y = node.y - NODE_H / 2
 
-      ctx.globalAlpha = opacity * nodeAlpha
+      ctx.save()
+      ctx.globalAlpha = opacity * (isLit ? 1 : 0.15)
 
-      // Node background
+      // Hover glow
+      if (isHovered) {
+        ctx.shadowBlur = 25
+        ctx.shadowColor = hexToRgba(typeColor, 0.5)
+      }
+
+      // Background (glassmorphic)
       ctx.beginPath()
-      ctx.roundRect(x, y, w, h, r)
-      ctx.fillStyle = isHovered ? '#1e1e24' : '#141418'
+      ctx.roundRect(x, y, NODE_W, NODE_H, NODE_R)
+      ctx.fillStyle = isHovered ? 'rgba(30, 30, 38, 0.95)' : 'rgba(18, 18, 24, 0.9)'
       ctx.fill()
-      ctx.strokeStyle = isHovered ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.08)'
-      ctx.lineWidth = isHovered ? 1.5 : 0.5
+
+      // Border
+      ctx.strokeStyle = isHovered ? hexToRgba(typeColor, 0.7) : 'rgba(255, 255, 255, 0.08)'
+      ctx.lineWidth = isHovered ? 1.5 : 0.8
       ctx.stroke()
 
-      // Type accent bar (left edge)
+      ctx.shadowBlur = 0
+
+      // Accent bar
       ctx.fillStyle = typeColor
       ctx.beginPath()
-      ctx.roundRect(x, y, 3, h, [r, 0, 0, r])
+      ctx.roundRect(x, y, 4, NODE_H, [NODE_R, 0, 0, NODE_R])
       ctx.fill()
 
-      // Text label
-      ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.7)'
-      ctx.font = node.type === 'code' ? '11px monospace' : '12px system-ui, -apple-system, sans-serif'
+      // Type label (top right)
+      ctx.fillStyle = hexToRgba(typeColor, 0.6)
+      ctx.font = 'bold 9px system-ui, sans-serif'
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'top'
+      ctx.fillText(node.type.toUpperCase(), x + NODE_W - 10, y + 8)
+
+      // Text (2-line wrap)
+      ctx.fillStyle = isHovered ? '#fff' : 'rgba(255, 255, 255, 0.85)'
+      ctx.font = node.type === 'code'
+        ? '12px "JetBrains Mono", "SF Mono", monospace'
+        : '600 13px "Inter", system-ui, sans-serif'
       ctx.textAlign = 'left'
-      ctx.textBaseline = 'middle'
-      const maxTextW = w - 16
-      const text = node.text.length > 45 ? node.text.slice(0, 42) + '...' : node.text
-      ctx.fillText(text, x + 10, y + h / 2, maxTextW)
+      ctx.textBaseline = 'top'
+
+      const maxW = NODE_W - 28
+      const words = node.text.split(' ')
+      let line1 = '', line2 = '', onLine2 = false
+      for (const word of words) {
+        const test = onLine2 ? line2 + word + ' ' : line1 + word + ' '
+        if (ctx.measureText(test).width > maxW && !onLine2) {
+          onLine2 = true
+          line2 = word + ' '
+        } else if (onLine2) {
+          line2 = test
+        } else {
+          line1 = test
+        }
+      }
+      if (line2 && ctx.measureText(line2).width > maxW) {
+        line2 = line2.slice(0, 38) + '...'
+      }
+
+      ctx.fillText(line1.trim(), x + 14, y + 12)
+      if (line2) ctx.fillText(line2.trim(), x + 14, y + 28)
+
+      // Tag pills
+      const tags = node.tags.slice(0, 3)
+      if (tags.length > 0) {
+        let tx = x + 14
+        ctx.font = '10px "SF Mono", monospace'
+        for (const tag of tags) {
+          const label = `#${tag}`
+          const tw = ctx.measureText(label).width + 10
+          if (tx + tw > x + NODE_W - 10) break
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.06)'
+          ctx.beginPath()
+          ctx.roundRect(tx, y + NODE_H - 24, tw, 16, 4)
+          ctx.fill()
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
+          ctx.fillText(label, tx + 5, y + NODE_H - 12)
+          tx += tw + 5
+        }
+      }
+
+      ctx.restore()
     }
 
-    ctx.globalAlpha = 1
+    ctx.restore()
   }
 
   // ── Hit Testing ─────────────────────────────────────────────
 
   private hitTest(x: number, y: number): HitResult | null {
     if (this.transitionProgress < 0.5) {
-      // Galaxy mode: test bubbles
       for (const bubble of this.bubbles) {
-        const dx = x - bubble.x
-        const dy = y - bubble.y
+        const dx = x - bubble.x, dy = y - bubble.y
         if (dx * dx + dy * dy <= bubble.radius * bubble.radius) {
           return { type: 'bubble', id: bubble.id, data: bubble }
         }
       }
     } else {
-      // Constellation mode: test nodes
       for (const node of this.nodes) {
-        const nx = node.x - node.width / 2
-        const ny = node.y - node.height / 2
-        if (x >= nx && x <= nx + node.width && y >= ny && y <= ny + node.height) {
+        const nx = node.x - NODE_W / 2, ny = node.y - NODE_H / 2
+        if (x >= nx && x <= nx + NODE_W && y >= ny && y <= ny + NODE_H) {
           return { type: 'node', id: node.id, data: node }
         }
       }
@@ -430,13 +507,12 @@ export class CanvasRenderer {
     return null
   }
 
-  // ── Event Handlers ──────────────────────────────────────────
+  // ── Events ────────────────────────────────────────────────────
 
   private handleMouseMove = (e: MouseEvent) => {
     const rect = this.canvas.getBoundingClientRect()
     this.mouseX = e.clientX - rect.left
     this.mouseY = e.clientY - rect.top
-
     const hit = this.hitTest(this.mouseX, this.mouseY)
     this.hoveredId = hit?.id || null
     this.canvas.style.cursor = hit ? 'pointer' : 'default'
@@ -445,11 +521,6 @@ export class CanvasRenderer {
 
   private handleClick = () => {
     const hit = this.hitTest(this.mouseX, this.mouseY)
-    if (hit) {
-      this.onClick?.(hit)
-    } else if (this.transitionProgress > 0.5) {
-      // Click background in constellation → drill out
-      this.onClick?.(null)
-    }
+    this.onClick?.(hit || null)
   }
 }
