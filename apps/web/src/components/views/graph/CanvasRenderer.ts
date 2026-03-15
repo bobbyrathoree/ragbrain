@@ -133,10 +133,15 @@ export class CanvasRenderer {
 
   // Interaction
   private hoveredId: string | null = null
-  private hoveredEdgeReason: string | null = null
+  // Edge reason displayed in tooltip (set during hitTest)
+  private hoveredNode: ConstellationNodePos | null = null
   private mouseX = 0
   private mouseY = 0
   private isDragging = false
+  private dragNode: ConstellationNodePos | null = null
+  private dragStartX = 0
+  private dragStartY = 0
+  private dragMoved = false
 
   // Transition
   private transitionProgress = 0
@@ -153,78 +158,37 @@ export class CanvasRenderer {
 
   private setupInteractions() {
     const self = this
-    const sel = d3.select(this.canvas)
 
-    // Zoom
+    // D3 zoom for pan/zoom (background only)
     const zoom = d3.zoom<HTMLCanvasElement, unknown>()
       .scaleExtent([0.3, 5])
-      .on('zoom', (e) => {
-        self.transform = e.transform
-      })
-    sel.call(zoom)
-
-    // Drag (constellation only)
-    const drag = d3.drag<HTMLCanvasElement, unknown>()
-      .subject((e) => {
-        if (self.transitionProgress < 0.5) return null as any
-        const x = self.transform.invertX(e.x)
-        const y = self.transform.invertY(e.y)
-        // Find nearest node
-        let closest: ConstellationNodePos | null = null
-        let minDist = Infinity
-        for (const n of self.nodes) {
-          const dx = x - n.x, dy = y - n.y
-          const dist = Math.sqrt(dx * dx + dy * dy)
-          if (dist < Math.max(n.width, n.height) / 2 + 10 && dist < minDist) {
-            closest = n; minDist = dist
-          }
+      .filter((e) => {
+        // Don't zoom-pan when over a node (let our manual drag handle it)
+        if (self.dragNode) return false
+        if (e.type === 'mousedown' || e.type === 'touchstart') {
+          const rect = self.canvas.getBoundingClientRect()
+          const mx = e.clientX - rect.left, my = e.clientY - rect.top
+          const hit = self.hitTest(mx, my)
+          if (hit?.type === 'node') return false // Let node drag handle this
         }
-        return closest
+        return true
       })
-      .on('start', (e) => {
-        if (!e.subject) return
-        self.isDragging = true
-        // FREEZE the simulation — nothing else moves while dragging
-        if (self.constellationSim) self.constellationSim.stop()
-        // Pin the node
-        e.subject.fx = e.subject.x
-        e.subject.fy = e.subject.y
-      })
-      .on('drag', (e) => {
-        if (!e.subject) return
-        // Move ONLY this node — edges stretch like rubber bands
-        e.subject.fx = self.transform.invertX(e.x)
-        e.subject.fy = self.transform.invertY(e.y)
-        // Update the actual position so edges draw correctly
-        e.subject.x = e.subject.fx
-        e.subject.y = e.subject.fy
-      })
-      .on('end', (e) => {
-        if (!e.subject) return
-        self.isDragging = false
-        // Release the pin — let physics snap it back
-        e.subject.fx = null
-        e.subject.fy = null
-        // Restart with a burst — the node flies back and ripples through the graph
-        if (self.constellationSim) {
-          self.constellationSim.alpha(0.5).restart()
-          // Cool down after the ripple
-          setTimeout(() => self.constellationSim?.alphaTarget(0), 800)
-        }
-      })
-    sel.call(drag as any)
+      .on('zoom', (e) => { self.transform = e.transform })
+    d3.select(this.canvas).call(zoom)
 
-    // Hover + click via mousemove
+    // Manual node drag + hover + click via native events
+    this.canvas.addEventListener('mousedown', this.handleMouseDown)
     this.canvas.addEventListener('mousemove', this.handleMouseMove)
-    this.canvas.addEventListener('click', this.handleClick)
+    this.canvas.addEventListener('mouseup', this.handleMouseUp)
   }
 
   dispose() {
     cancelAnimationFrame(this.animationId)
     this.galaxySim?.stop()
     this.constellationSim?.stop()
+    this.canvas.removeEventListener('mousedown', this.handleMouseDown)
     this.canvas.removeEventListener('mousemove', this.handleMouseMove)
-    this.canvas.removeEventListener('click', this.handleClick)
+    this.canvas.removeEventListener('mouseup', this.handleMouseUp)
   }
 
   resize(width: number, height: number) {
@@ -510,45 +474,106 @@ export class CanvasRenderer {
   // ── Tooltip ─────────────────────────────────────────────────
 
   private drawTooltip() {
-    if (this.isDragging) return
+    if (this.isDragging || !this.hoveredNode) return
+    if (this.transitionProgress < 0.5) return
 
-    // Edge reason tooltip
-    if (this.hoveredId && this.hoveredEdgeReason) {
-      const { ctx } = this
-      const tx = this.mouseX + 14, ty = this.mouseY - 20
-      ctx.save()
-      ctx.font = '11px system-ui, sans-serif'
-      const tw = ctx.measureText(this.hoveredEdgeReason).width + 16
-      ctx.fillStyle = 'rgba(20,20,28,0.95)'
-      ctx.beginPath()
-      ctx.roundRect(tx, ty, tw, 24, 4)
-      ctx.fill()
-      ctx.fillStyle = 'rgba(255,255,255,0.6)'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(this.hoveredEdgeReason, tx + 8, ty + 12)
-      ctx.restore()
-    }
+    const node = this.hoveredNode
+    const { ctx } = this
+    const tc = TYPE_COLORS[node.type] || '#a8a29e'
 
-    // Node tooltip (show tags on hover)
-    if (this.hoveredId && this.transitionProgress > 0.5) {
-      const node = this.nodes.find(n => n.id === this.hoveredId)
-      if (node && node.tags.length > 0) {
-        const { ctx } = this
-        const tagText = node.tags.slice(0, 4).map(t => `#${t}`).join('  ')
-        const tx = this.mouseX + 14, ty = this.mouseY + 16
-        ctx.save()
-        ctx.font = '10px "SF Mono", monospace'
-        const tw = ctx.measureText(tagText).width + 16
-        ctx.fillStyle = 'rgba(20,20,28,0.92)'
-        ctx.beginPath()
-        ctx.roundRect(tx, ty, tw, 22, 4)
-        ctx.fill()
-        ctx.fillStyle = 'rgba(255,255,255,0.5)'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(tagText, tx + 8, ty + 11)
-        ctx.restore()
+    // Position tooltip near the node but not overlapping
+    const tx = this.mouseX + 16
+    const ty = this.mouseY + 16
+    const maxW = 320
+    const padX = 14, padY = 12
+
+    ctx.save()
+    ctx.font = '13px "Inter", system-ui, sans-serif'
+
+    // Word-wrap the full text
+    const fullText = node.text
+    const words = fullText.split(' ')
+    const lines: string[] = []
+    let currentLine = ''
+    for (const word of words) {
+      const test = currentLine ? currentLine + ' ' + word : word
+      if (ctx.measureText(test).width > maxW - padX * 2) {
+        if (currentLine) lines.push(currentLine)
+        currentLine = word
+      } else {
+        currentLine = test
       }
     }
+    if (currentLine) lines.push(currentLine)
+
+    // Tags line
+    const tagLine = node.tags.length > 0 ? node.tags.slice(0, 4).map(t => `#${t}`).join('  ') : ''
+
+    // Edge reasons
+    const reasons = this.edges
+      .filter(e => e.source === node.id || e.target === node.id)
+      .map(e => (e as any).reason)
+      .filter(Boolean)
+    const reasonText = reasons.length > 0 ? `Connected: ${reasons[0]}` : ''
+
+    // Calculate tooltip height
+    const lineH = 18
+    const textH = lines.length * lineH
+    const typeH = 20
+    const tagH = tagLine ? 18 : 0
+    const reasonH = reasonText ? 18 : 0
+    const totalH = padY + typeH + textH + (tagH ? 8 + tagH : 0) + (reasonH ? 8 + reasonH : 0) + padY
+    const totalW = Math.min(maxW, Math.max(200, ...lines.map(l => ctx.measureText(l).width + padX * 2 + 10)))
+
+    // Ensure tooltip stays on screen
+    const finalX = Math.min(tx, this.viewport.width - totalW - 10)
+    const finalY = Math.min(ty, this.viewport.height - totalH - 10)
+
+    // Background
+    ctx.fillStyle = 'rgba(16, 16, 24, 0.96)'
+    ctx.beginPath()
+    ctx.roundRect(finalX, finalY, totalW, totalH, 8)
+    ctx.fill()
+    ctx.strokeStyle = hexToRgba(tc, 0.3)
+    ctx.lineWidth = 1
+    ctx.stroke()
+
+    let cy = finalY + padY
+
+    // Type label
+    ctx.fillStyle = tc
+    ctx.font = 'bold 10px system-ui, sans-serif'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillText(`${(TYPE_SHAPES[node.type] || '●')} ${node.type.toUpperCase()}`, finalX + padX, cy)
+    cy += typeH
+
+    // Full text
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'
+    ctx.font = '13px "Inter", system-ui, sans-serif'
+    for (const line of lines) {
+      ctx.fillText(line, finalX + padX, cy)
+      cy += lineH
+    }
+
+    // Tags
+    if (tagLine) {
+      cy += 8
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'
+      ctx.font = '10px "SF Mono", monospace'
+      ctx.fillText(tagLine, finalX + padX, cy)
+      cy += tagH
+    }
+
+    // Connection reason
+    if (reasonText) {
+      cy += 8
+      ctx.fillStyle = hexToRgba(tc, 0.5)
+      ctx.font = '10px system-ui, sans-serif'
+      ctx.fillText(reasonText, finalX + padX, cy)
+    }
+
+    ctx.restore()
   }
 
   // ── Hit Testing ─────────────────────────────────────────────
@@ -571,35 +596,98 @@ export class CanvasRenderer {
         const nx = n.x - n.width / 2, ny = n.y - NODE_H / 2
         if (x >= nx && x <= nx + n.width && y >= ny && y <= ny + NODE_H) {
           // Find edge reasons for this node
-          const reasons = this.edges
-            .filter(e => e.source === n.id || e.target === n.id)
-            .map(e => (e as any).reason)
-            .filter(Boolean)
-          this.hoveredEdgeReason = reasons.length > 0 ? `Linked: ${reasons[0]}` : null
+          // Reason is shown in the tooltip via drawTooltip()
           return { type: 'node', id: n.id, data: n }
         }
       }
     }
-    this.hoveredEdgeReason = null
+    // no node hovered
     return null
   }
 
   // ── Events ────────────────────────────────────────────────────
 
-  private handleMouseMove = (e: MouseEvent) => {
-    if (this.isDragging) return
+  private handleMouseDown = (e: MouseEvent) => {
     const rect = this.canvas.getBoundingClientRect()
     this.mouseX = e.clientX - rect.left
     this.mouseY = e.clientY - rect.top
+    this.dragStartX = this.mouseX
+    this.dragStartY = this.mouseY
+    this.dragMoved = false
+
+    const hit = this.hitTest(this.mouseX, this.mouseY)
+    if (hit?.type === 'node') {
+      this.dragNode = hit.data as ConstellationNodePos
+      this.isDragging = true
+      // Freeze simulation — only this node will move
+      this.constellationSim?.stop()
+      this.dragNode.fx = this.dragNode.x
+      this.dragNode.fy = this.dragNode.y
+      e.preventDefault() // Prevent D3 zoom from capturing this
+    }
+  }
+
+  private handleMouseMove = (e: MouseEvent) => {
+    const rect = this.canvas.getBoundingClientRect()
+    this.mouseX = e.clientX - rect.left
+    this.mouseY = e.clientY - rect.top
+
+    if (this.isDragging && this.dragNode) {
+      // Move only the dragged node — edges stretch like rubber bands
+      const wx = this.transform.invertX(this.mouseX)
+      const wy = this.transform.invertY(this.mouseY)
+      this.dragNode.fx = wx
+      this.dragNode.fy = wy
+      this.dragNode.x = wx
+      this.dragNode.y = wy
+      this.dragMoved = true
+      this.canvas.style.cursor = 'grabbing'
+      return
+    }
+
+    // Hover detection
     const hit = this.hitTest(this.mouseX, this.mouseY)
     this.hoveredId = hit?.id || null
-    this.canvas.style.cursor = hit ? 'pointer' : (this.isDragging ? 'grabbing' : 'grab')
+    this.hoveredNode = hit?.type === 'node' ? (hit.data as ConstellationNodePos) : null
+    this.canvas.style.cursor = hit ? 'pointer' : 'default'
     this.onHover?.(hit)
   }
 
-  private handleClick = () => {
-    if (this.isDragging) return
-    const hit = this.hitTest(this.mouseX, this.mouseY)
-    this.onClick?.(hit || null)
+  private handleMouseUp = (_e: MouseEvent) => {
+    if (this.isDragging && this.dragNode) {
+      // Release the node
+      this.dragNode.fx = null
+      this.dragNode.fy = null
+
+      if (!this.dragMoved) {
+        // Click (no drag movement) — fire click handler
+        const hit = this.hitTest(this.mouseX, this.mouseY)
+        this.onClick?.(hit || null)
+      } else {
+        // Was a real drag — snap back with ripple
+        if (this.constellationSim) {
+          this.constellationSim.alpha(0.5).restart()
+          setTimeout(() => this.constellationSim?.alphaTarget(0), 800)
+        }
+      }
+
+      this.dragNode = null
+      this.isDragging = false
+      this.canvas.style.cursor = 'default'
+      return
+    }
+
+    // Background click (no node was being dragged)
+    const dx = this.mouseX - this.dragStartX
+    const dy = this.mouseY - this.dragStartY
+    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+      // Genuine click (not a pan)
+      const hit = this.hitTest(this.mouseX, this.mouseY)
+      if (hit) {
+        this.onClick?.(hit)
+      } else if (this.transitionProgress > 0.5) {
+        this.onClick?.(null) // Background click → drill out
+      }
+    }
   }
 }
