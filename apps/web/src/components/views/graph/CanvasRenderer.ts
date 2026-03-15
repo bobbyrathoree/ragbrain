@@ -181,6 +181,8 @@ export class CanvasRenderer {
     this.canvas.addEventListener('mousedown', this.handleMouseDown)
     this.canvas.addEventListener('mousemove', this.handleMouseMove)
     this.canvas.addEventListener('mouseup', this.handleMouseUp)
+    // Fallback click handler for when D3 zoom consumes mouseup
+    this.canvas.addEventListener('dblclick', this.handleDblClick)
   }
 
   dispose() {
@@ -190,6 +192,7 @@ export class CanvasRenderer {
     this.canvas.removeEventListener('mousedown', this.handleMouseDown)
     this.canvas.removeEventListener('mousemove', this.handleMouseMove)
     this.canvas.removeEventListener('mouseup', this.handleMouseUp)
+    this.canvas.removeEventListener('dblclick', this.handleDblClick)
   }
 
   resize(width: number, height: number) {
@@ -368,7 +371,7 @@ export class CanvasRenderer {
 
       // "captures" label (replaces "thoughts")
       ctx.fillStyle = hexToRgba(bubble.color, 0.4)
-      ctx.font = '10px system-ui, sans-serif'
+      ctx.font = '10px "Inter", system-ui, sans-serif'
       ctx.fillText('captures', bubble.x, bubble.y + r * 0.25 + 4)
 
       // Label
@@ -408,7 +411,8 @@ export class CanvasRenderer {
     ctx.globalAlpha = opacity
 
     // ── Edges ──
-    for (const edge of this.edges) {
+    for (let edgeIdx = 0; edgeIdx < this.edges.length; edgeIdx++) {
+      const edge = this.edges[edgeIdx]
       const src = this.nodes.find(n => n.id === edge.source)
       const tgt = this.nodes.find(n => n.id === edge.target)
       if (!src || !tgt) continue
@@ -420,20 +424,42 @@ export class CanvasRenderer {
       ctx.moveTo(src.x, src.y)
       ctx.lineTo(tgt.x, tgt.y)
 
+      // Breathing animation on default edges
+      const breathe = 0.5 + Math.sin(this.time * 1.5 + edgeIdx * 0.7) * 0.5
+
       if (isDirectlyConnected) {
         // Bright theme-colored edge for direct connections
-        ctx.strokeStyle = hexToRgba(this.constellationColor, 0.7)
-        ctx.lineWidth = 1.5
+        ctx.strokeStyle = hexToRgba(this.constellationColor, 0.6)
+        ctx.lineWidth = 2
+        ctx.stroke()
+
+        // Animated orb traveling along the edge
+        const speed = 0.3 + edge.similarity * 0.5
+        const t = ((this.time * speed + edgeIdx * 0.4) % 1)
+        const orbX = src.x + (tgt.x - src.x) * t
+        const orbY = src.y + (tgt.y - src.y) * t
+
+        ctx.beginPath()
+        ctx.arc(orbX, orbY, 3, 0, Math.PI * 2)
+        ctx.fillStyle = hexToRgba(this.constellationColor, 0.9)
+        ctx.fill()
+
+        // Orb glow
+        ctx.beginPath()
+        ctx.arc(orbX, orbY, 6, 0, Math.PI * 2)
+        ctx.fillStyle = hexToRgba(this.constellationColor, 0.2)
+        ctx.fill()
       } else if (isLit) {
-        // Subtle neutral for visible but not focused
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)'
-        ctx.lineWidth = 0.5
+        // Default: visible, gently breathing
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.04 + breathe * 0.06})`
+        ctx.lineWidth = 0.6
+        ctx.stroke()
       } else {
-        // Nearly invisible when dimmed
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'
+        // Dimmed when something else is hovered
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.015)'
         ctx.lineWidth = 0.3
+        ctx.stroke()
       }
-      ctx.stroke()
     }
 
     // ── Nodes (compact pills) ──
@@ -465,7 +491,7 @@ export class CanvasRenderer {
 
       // Type shape indicator (left)
       ctx.fillStyle = tc
-      ctx.font = '13px system-ui, sans-serif'
+      ctx.font = '13px "Inter", system-ui, sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(shape, x + 16, y + NODE_H / 2)
@@ -495,8 +521,8 @@ export class CanvasRenderer {
     const { ctx } = this
     const tc = TYPE_COLORS[node.type] || '#a8a29e'
 
-    // Position tooltip near the node but not overlapping
-    const tx = this.mouseX + 16
+    // Position tooltip near the node
+    const tx = this.mouseX + 18
     const ty = this.mouseY + 16
     const maxW = 320
     const padX = 14, padY = 12
@@ -583,7 +609,7 @@ export class CanvasRenderer {
     if (reasonText) {
       cy += 8
       ctx.fillStyle = hexToRgba(tc, 0.5)
-      ctx.font = '10px system-ui, sans-serif'
+      ctx.font = '10px "Inter", system-ui, sans-serif'
       ctx.fillText(reasonText, finalX + padX, cy)
     }
 
@@ -693,14 +719,24 @@ export class CanvasRenderer {
     // Background click (no node was being dragged)
     const dx = this.mouseX - this.dragStartX
     const dy = this.mouseY - this.dragStartY
-    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
-      // Genuine click (not a pan)
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) {
+      // Genuine click (not a pan) — increased slop for zoom interference
       const hit = this.hitTest(this.mouseX, this.mouseY)
       if (hit) {
         this.onClick?.(hit)
       } else if (this.transitionProgress > 0.5) {
         this.onClick?.(null) // Background click → drill out
       }
+    }
+  }
+
+  // Double-click on background = guaranteed drill out (fallback for zoom interference)
+  private handleDblClick = (e: MouseEvent) => {
+    const rect = this.canvas.getBoundingClientRect()
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top
+    const hit = this.hitTest(mx, my)
+    if (!hit && this.transitionProgress > 0.5) {
+      this.onClick?.(null) // Drill out
     }
   }
 }

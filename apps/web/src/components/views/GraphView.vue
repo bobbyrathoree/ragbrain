@@ -101,9 +101,15 @@ watch(constellationData, (data) => {
   <div class="h-screen flex relative">
     <!-- Main canvas area -->
     <div class="flex-1 flex flex-col">
-      <!-- Theme label (constellation only, minimal) -->
-      <div v-if="currentLevel === 1" class="absolute top-16 left-4 z-10">
-        <span class="text-text-primary text-sm font-medium">{{ selectedThemeLabel }}</span>
+      <!-- Theme label (constellation only) -->
+      <div v-if="currentLevel === 1" class="absolute top-16 left-6 z-10">
+        <div class="text-text-primary text-xl font-bold tracking-tight" style="font-family: 'Inter', system-ui, sans-serif;">
+          {{ selectedThemeLabel }}
+        </div>
+        <button @click="renderer?.transitionToGalaxy(); drillOut()"
+          class="text-text-tertiary text-xs mt-1 hover:text-text-primary transition-colors cursor-pointer">
+          &larr; Back to overview
+        </button>
       </div>
 
       <!-- Canvas container -->
@@ -133,19 +139,9 @@ watch(constellationData, (data) => {
         </div>
       </div>
 
-      <!-- Legend -->
-      <div v-if="galaxyData && galaxyData.themes.length > 0"
-        class="absolute bottom-4 left-4 z-10 flex items-center gap-4 bg-bg-elevated/80 backdrop-blur-sm rounded-lg px-4 py-2 border border-border-secondary">
-        <div v-for="theme in galaxyData.themes" :key="theme.id" class="flex items-center gap-1.5">
-          <div class="w-2.5 h-2.5 rounded-full" :style="{ backgroundColor: theme.color }" />
-          <span class="text-xs text-text-secondary">{{ theme.label }}</span>
-        </div>
-      </div>
-
-      <!-- Controls hint (minimal) -->
-      <div class="absolute bottom-4 right-4 z-10 text-[10px] text-text-tertiary/50 px-2 py-1">
-        <span v-if="currentLevel === 0">Click to explore</span>
-        <span v-else>Drag to rearrange &middot; Click outside to go back</span>
+      <!-- Minimal hint (galaxy only) -->
+      <div v-if="currentLevel === 0" class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 text-[11px] text-text-tertiary/40">
+        Click a cluster to explore
       </div>
     </div>
 
