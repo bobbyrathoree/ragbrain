@@ -238,14 +238,15 @@ export class CanvasRenderer {
     const cx = this.viewport.width / 2, cy = this.viewport.height / 2
 
     // Measure text widths for compact pills
+    // Bloom spawn: all nodes start at center and explode outward via physics
     this.nodes = thoughts.map(t => {
       const truncated = t.text.length > 55 ? t.text.slice(0, 52) + '...' : t.text
       const w = measureNodeWidth(this.ctx, truncated)
       return {
         ...t,
         text: truncated,
-        x: cx + (Math.random() - 0.5) * 150,
-        y: cy + (Math.random() - 0.5) * 150,
+        x: cx + (Math.random() - 0.5) * 20,
+        y: cy + (Math.random() - 0.5) * 20,
         width: w, height: NODE_H,
       }
     })
@@ -411,14 +412,26 @@ export class CanvasRenderer {
       const tgt = this.nodes.find(n => n.id === edge.target)
       if (!src || !tgt) continue
 
+      const isDirectlyConnected = this.hoveredId && (edge.source === this.hoveredId || edge.target === this.hoveredId)
       const isLit = !this.hoveredId || (connected.has(edge.source) && connected.has(edge.target))
+
       ctx.beginPath()
       ctx.moveTo(src.x, src.y)
       ctx.lineTo(tgt.x, tgt.y)
-      ctx.strokeStyle = isLit
-        ? hexToRgba(this.constellationColor, Math.max(0.15, edge.similarity * 0.6))
-        : 'rgba(255,255,255,0.03)'
-      ctx.lineWidth = isLit ? Math.max(1, edge.similarity * 3) : 0.3
+
+      if (isDirectlyConnected) {
+        // Bright theme-colored edge for direct connections
+        ctx.strokeStyle = hexToRgba(this.constellationColor, 0.7)
+        ctx.lineWidth = 1.5
+      } else if (isLit) {
+        // Subtle neutral for visible but not focused
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)'
+        ctx.lineWidth = 0.5
+      } else {
+        // Nearly invisible when dimmed
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'
+        ctx.lineWidth = 0.3
+      }
       ctx.stroke()
     }
 
@@ -619,8 +632,8 @@ export class CanvasRenderer {
     if (hit?.type === 'node') {
       this.dragNode = hit.data as ConstellationNodePos
       this.isDragging = true
-      // Freeze simulation — only this node will move
-      this.constellationSim?.stop()
+      // Keep sim warm — edges act as soft rubber bands pulling neighbors slightly
+      this.constellationSim?.alphaTarget(0.08).restart()
       this.dragNode.fx = this.dragNode.x
       this.dragNode.fy = this.dragNode.y
       e.preventDefault() // Prevent D3 zoom from capturing this
@@ -640,7 +653,9 @@ export class CanvasRenderer {
       this.dragNode.fy = wy
       this.dragNode.x = wx
       this.dragNode.y = wy
-      this.dragMoved = true
+      // Only count as drag if moved more than 4px (prevents jitter-canceling clicks)
+      const dist = Math.sqrt((this.mouseX - this.dragStartX) ** 2 + (this.mouseY - this.dragStartY) ** 2)
+      if (dist > 4) this.dragMoved = true
       this.canvas.style.cursor = 'grabbing'
       return
     }
@@ -663,13 +678,10 @@ export class CanvasRenderer {
         // Click (no drag movement) — fire click handler
         const hit = this.hitTest(this.mouseX, this.mouseY)
         this.onClick?.(hit || null)
-      } else {
-        // Was a real drag — snap back with ripple
-        if (this.constellationSim) {
-          this.constellationSim.alpha(0.5).restart()
-          setTimeout(() => this.constellationSim?.alphaTarget(0), 800)
-        }
       }
+
+      // Let simulation cool down naturally — node drifts back, neighbors settle
+      this.constellationSim?.alphaTarget(0)
 
       this.dragNode = null
       this.isDragging = false
