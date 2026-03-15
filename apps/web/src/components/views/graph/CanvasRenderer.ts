@@ -26,10 +26,14 @@ const TYPE_SHAPES: Record<string, string> = {
 
 interface Viewport { width: number; height: number; dpr: number }
 
+interface Particle {
+  angle: number; distance: number; speed: number; size: number; opacity: number
+}
+
 export interface GalaxyBubble extends GalaxyTheme {
   x: number; y: number; radius: number
   vx?: number; vy?: number
-  typeBreakdown?: { type: string; count: number }[]
+  particles: Particle[]
 }
 
 export interface ConstellationNodePos extends ConstellationNode {
@@ -218,7 +222,15 @@ export class CanvasRenderer {
       const radius = minR + Math.sqrt(t.count / maxCount) * (maxR - minR)
       const angle = (i / themes.length) * Math.PI * 2 - Math.PI / 2
       const spread = Math.min(this.viewport.width, this.viewport.height) * 0.18
-      return { ...t, x: cx + Math.cos(angle) * spread, y: cy + Math.sin(angle) * spread, radius }
+      // Initialize orbiting particles
+      const particles: Particle[] = Array.from({ length: 12 }, () => ({
+        angle: Math.random() * Math.PI * 2,
+        distance: radius + 8 + Math.random() * 20,
+        speed: 0.15 + Math.random() * 0.3,
+        size: 1 + Math.random() * 1.5,
+        opacity: 0.3 + Math.random() * 0.5,
+      }))
+      return { ...t, x: cx + Math.cos(angle) * spread, y: cy + Math.sin(angle) * spread, radius, particles }
     })
 
     this.galaxySim?.stop()
@@ -269,6 +281,44 @@ export class CanvasRenderer {
       .force('x', d3.forceX(cx).strength(0.06))
       .force('y', d3.forceY(cy).strength(0.06))
       .alphaDecay(0.025).on('tick', () => {})
+  }
+
+  // ── Focus Node (pan to center, flash highlight) ──────────────
+
+  focusNode(id: string) {
+    const node = this.nodes.find(n => n.id === id)
+    if (!node) return
+
+    // Pan to center the node (offset for drawer width ~384px)
+    const drawerOffset = 192 // half of w-96
+    const targetX = this.viewport.width / 2 - drawerOffset
+    const targetY = this.viewport.height / 2
+
+    const dx = targetX - node.x * this.transform.k - this.transform.x
+    const dy = targetY - node.y * this.transform.k - this.transform.y
+
+    // Smooth tween
+    const startTx = this.transform.x
+    const startTy = this.transform.y
+    const duration = 500
+    const startTime = performance.now()
+
+    const tween = () => {
+      const elapsed = performance.now() - startTime
+      const t = Math.min(1, elapsed / duration)
+      const ease = t * t * (3 - 2 * t) // smoothstep
+      this.transform = d3.zoomIdentity
+        .translate(startTx + dx * ease, startTy + dy * ease)
+        .scale(this.transform.k)
+      if (t < 1) requestAnimationFrame(tween)
+    }
+    tween()
+
+    // Flash highlight (temporary bright border for 800ms)
+    this.hoveredId = id
+    setTimeout(() => {
+      if (this.hoveredId === id) this.hoveredId = null
+    }, 800)
   }
 
   // ── Transitions ─────────────────────────────────────────────
@@ -329,7 +379,24 @@ export class CanvasRenderer {
     ctx.save()
     ctx.globalAlpha = opacity
 
-    // Affinity rivers
+    // Animated flowing lines between ALL bubble pairs
+    for (let i = 0; i < this.bubbles.length; i++) {
+      for (let j = i + 1; j < this.bubbles.length; j++) {
+        const src = this.bubbles[i], tgt = this.bubbles[j]
+        ctx.beginPath()
+        const mx = (src.x + tgt.x) / 2, my = (src.y + tgt.y) / 2 - 30
+        ctx.moveTo(src.x, src.y)
+        ctx.quadraticCurveTo(mx, my, tgt.x, tgt.y)
+        ctx.setLineDash([8, 16])
+        ctx.lineDashOffset = -this.time * 20
+        ctx.strokeStyle = blendColors(src.color, tgt.color, 0.07)
+        ctx.lineWidth = 1
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+    }
+
+    // Stronger affinity lines (if data exists)
     for (const aff of this.affinities) {
       const src = this.bubbles.find(b => b.id === aff.source)
       const tgt = this.bubbles.find(b => b.id === aff.target)
@@ -338,47 +405,69 @@ export class CanvasRenderer {
       const mx = (src.x + tgt.x) / 2, my = (src.y + tgt.y) / 2 - 40
       ctx.moveTo(src.x, src.y)
       ctx.quadraticCurveTo(mx, my, tgt.x, tgt.y)
-      ctx.strokeStyle = blendColors(src.color, tgt.color, Math.max(0.08, aff.strength * 0.5))
-      ctx.lineWidth = Math.max(1.5, aff.volume * 0.6)
+      ctx.strokeStyle = blendColors(src.color, tgt.color, Math.max(0.12, aff.strength * 0.5))
+      ctx.lineWidth = Math.max(2, aff.volume * 0.6)
       ctx.stroke()
     }
 
-    // Bubbles
+    // Bubbles with full visual treatment
     for (const bubble of this.bubbles) {
+      const bi = this.bubbles.indexOf(bubble)
       const isHovered = this.hoveredId === bubble.id
-      const breathe = 1 + Math.sin(this.time * 0.7 + this.bubbles.indexOf(bubble) * 1.8) * 0.02
+      const breathe = 1 + Math.sin(this.time * 0.7 + bi * 1.8) * 0.025
       const r = bubble.radius * breathe * (isHovered ? 1.08 : 1)
 
-      if (isHovered) { ctx.shadowBlur = 30; ctx.shadowColor = hexToRgba(bubble.color, 0.4) }
+      // Pulsing atmosphere glow
+      const glowPulse = 15 + Math.sin(this.time * 0.5 + bi) * 8
+      ctx.shadowBlur = isHovered ? 35 : glowPulse
+      ctx.shadowColor = hexToRgba(bubble.color, isHovered ? 0.5 : 0.15)
 
-      // Outer glow
-      ctx.beginPath(); ctx.arc(bubble.x, bubble.y, r + 10, 0, Math.PI * 2)
-      ctx.fillStyle = hexToRgba(bubble.color, 0.04); ctx.fill()
+      // Outer atmosphere
+      ctx.beginPath(); ctx.arc(bubble.x, bubble.y, r + 12, 0, Math.PI * 2)
+      ctx.fillStyle = hexToRgba(bubble.color, 0.03); ctx.fill()
 
-      // Main
+      // Main circle with radial gradient
+      const grad = ctx.createRadialGradient(bubble.x, bubble.y, 0, bubble.x, bubble.y, r)
+      grad.addColorStop(0, hexToRgba(bubble.color, isHovered ? 0.3 : 0.22))
+      grad.addColorStop(0.7, hexToRgba(bubble.color, isHovered ? 0.2 : 0.12))
+      grad.addColorStop(1, hexToRgba(bubble.color, 0.06))
       ctx.beginPath(); ctx.arc(bubble.x, bubble.y, r, 0, Math.PI * 2)
-      ctx.fillStyle = hexToRgba(bubble.color, isHovered ? 0.25 : 0.15); ctx.fill()
-      ctx.strokeStyle = hexToRgba(bubble.color, isHovered ? 0.65 : 0.35)
+      ctx.fillStyle = grad; ctx.fill()
+      ctx.strokeStyle = hexToRgba(bubble.color, isHovered ? 0.7 : 0.4)
       ctx.lineWidth = isHovered ? 2.5 : 1.5; ctx.stroke()
-
       ctx.shadowBlur = 0
+
+      // Glass highlight (reflection arc at ~10 o'clock)
+      ctx.beginPath()
+      ctx.arc(bubble.x, bubble.y, r * 0.82, -Math.PI * 0.75, -Math.PI * 0.35)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)'
+      ctx.lineWidth = 2; ctx.stroke()
+
+      // Orbiting particles (theme-colored energy)
+      for (const p of bubble.particles) {
+        const px = bubble.x + Math.cos(p.angle + this.time * p.speed) * p.distance
+        const py = bubble.y + Math.sin(p.angle + this.time * p.speed) * p.distance
+        ctx.beginPath(); ctx.arc(px, py, p.size, 0, Math.PI * 2)
+        ctx.fillStyle = hexToRgba(bubble.color, p.opacity * 0.6)
+        ctx.fill()
+      }
 
       // Count
       ctx.fillStyle = hexToRgba(bubble.color, 0.95)
-      ctx.font = `bold ${Math.max(22, r * 0.45)}px "Inter", system-ui, sans-serif`
+      ctx.font = `bold ${Math.max(24, r * 0.45)}px "Inter", system-ui, sans-serif`
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
       ctx.fillText(String(bubble.count), bubble.x, bubble.y - 6)
 
-      // "captures" label (replaces "thoughts")
+      // "captures"
       ctx.fillStyle = hexToRgba(bubble.color, 0.4)
       ctx.font = '10px "Inter", system-ui, sans-serif'
       ctx.fillText('captures', bubble.x, bubble.y + r * 0.25 + 4)
 
       // Label
       ctx.fillStyle = 'rgba(255,255,255,0.9)'
-      ctx.font = `600 14px "Inter", system-ui, sans-serif`
+      ctx.font = '600 14px "Inter", system-ui, sans-serif'
       ctx.textBaseline = 'top'
-      ctx.fillText(bubble.label, bubble.x, bubble.y + r + 14)
+      ctx.fillText(bubble.label, bubble.x, bubble.y + r + 16)
     }
 
     ctx.restore()
@@ -546,9 +635,6 @@ export class CanvasRenderer {
     }
     if (currentLine) lines.push(currentLine)
 
-    // Tags line
-    const tagLine = node.tags.length > 0 ? node.tags.slice(0, 4).map(t => `#${t}`).join('  ') : ''
-
     // Edge reasons
     const reasons = this.edges
       .filter(e => e.source === node.id || e.target === node.id)
@@ -560,7 +646,7 @@ export class CanvasRenderer {
     const lineH = 18
     const textH = lines.length * lineH
     const typeH = 20
-    const tagH = tagLine ? 18 : 0
+    const tagH = node.tags.length > 0 ? 18 : 0
     const reasonH = reasonText ? 18 : 0
     const totalH = padY + typeH + textH + (tagH ? 8 + tagH : 0) + (reasonH ? 8 + reasonH : 0) + padY
     const totalW = Math.min(maxW, Math.max(200, ...lines.map(l => ctx.measureText(l).width + padX * 2 + 10)))
@@ -596,13 +682,23 @@ export class CanvasRenderer {
       cy += lineH
     }
 
-    // Tags
-    if (tagLine) {
+    // Tags (per-tag measurement to prevent overflow)
+    if (node.tags.length > 0) {
       cy += 8
       ctx.fillStyle = 'rgba(255,255,255,0.35)'
       ctx.font = '10px "SF Mono", monospace'
-      ctx.fillText(tagLine, finalX + padX, cy)
-      cy += tagH
+      const maxTagW = totalW - padX * 2 - 10
+      let tagDisplay = ''
+      for (const tag of node.tags.slice(0, 5)) {
+        const candidate = tagDisplay ? tagDisplay + '  #' + tag : '#' + tag
+        if (ctx.measureText(candidate).width > maxTagW) {
+          tagDisplay += '  ...'
+          break
+        }
+        tagDisplay = candidate
+      }
+      ctx.fillText(tagDisplay, finalX + padX, cy)
+      cy += 18
     }
 
     // Connection reason
