@@ -163,15 +163,16 @@ export class CanvasRenderer {
     const zoom = d3.zoom<HTMLCanvasElement, unknown>()
       .scaleExtent([0.3, 5])
       .filter((e) => {
-        // Don't zoom-pan when over a node (let our manual drag handle it)
+        // Don't zoom-pan when over a node or bubble (let our handlers manage clicks)
         if (self.dragNode) return false
         if (e.type === 'mousedown' || e.type === 'touchstart') {
           const rect = self.canvas.getBoundingClientRect()
-          const mx = e.clientX - rect.left, my = e.clientY - rect.top
+          const mx = (e as MouseEvent).clientX - rect.left
+          const my = (e as MouseEvent).clientY - rect.top
           const hit = self.hitTest(mx, my)
-          if (hit?.type === 'node') return false // Let node drag handle this
+          if (hit) return false // Block zoom for any interactive element
         }
-        return true
+        return !e.button // Only allow left-click zoom (scroll wheel always works)
       })
       .on('zoom', (e) => { self.transform = e.transform })
     d3.select(this.canvas).call(zoom)
