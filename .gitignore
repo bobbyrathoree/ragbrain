@@ -144,12 +144,17 @@ Desktop.ini
 *.tar.gz
 *.rar
 
-# Playwright MCP
+# Playwright
 .playwright-mcp/
+.playwright-cli/
+playwright-report/
+test-results/
+
+# Superpowers brainstorm
+.superpowers/
 
 # Screenshots
 *.png
 
 # Keep these
 !.gitkeep
-!.github/.superpowers/
