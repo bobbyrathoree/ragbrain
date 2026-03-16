@@ -12,6 +12,7 @@ const {
   isLoading,
   isLoadingMore,
   hasMore,
+  error: feedError,
   fetchThoughts,
   fetchMoreThoughts,
   updateThought,
@@ -240,6 +241,10 @@ onUnmounted(() => {
     <!-- Search + Filters -->
     <div class="space-y-4 mb-8">
       <!-- Search bar -->
+      <div v-if="feedError" class="px-4 py-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg">
+        {{ feedError }}
+      </div>
+
       <div class="relative">
         <div class="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -403,6 +408,7 @@ onUnmounted(() => {
               <span :class="['uppercase tracking-wider font-semibold', typeLabelColor[thought.type] || 'text-stone-400']">{{ thought.type }}</span>
               <span class="text-text-tertiary">·</span>
               <span class="text-text-tertiary">{{ formatTime(thought.createdAt) }}</span>
+              <span v-if="thought.indexingStatus === 'pending'" class="text-amber-400/70 border border-amber-400/30 rounded px-1.5 py-0.5 text-[10px]">Indexing...</span>
             </div>
           </div>
 

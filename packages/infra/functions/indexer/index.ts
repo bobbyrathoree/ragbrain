@@ -384,7 +384,7 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
       pk: { S: `user#${thoughtData.user}` },
       sk: { S: `ts#${new Date(thoughtData.createdAt).getTime()}#${thoughtData.id}` },
     },
-    UpdateExpression: 'SET #summary = :summary, #autoTags = :autoTags, #category = :category, #intent = :intent, #entities = :entities, #relatedIds = :relatedIds, #embeddingId = :embeddingId, #indexedAt = :indexedAt',
+    UpdateExpression: 'SET #summary = :summary, #autoTags = :autoTags, #category = :category, #intent = :intent, #entities = :entities, #relatedIds = :relatedIds, #embeddingId = :embeddingId, #indexedAt = :indexedAt, #indexingStatus = :indexingStatus',
     ExpressionAttributeNames: {
       '#summary': 'summary',
       '#autoTags': 'autoTags',
@@ -394,6 +394,7 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
       '#relatedIds': 'relatedIds',
       '#embeddingId': 'embeddingId',
       '#indexedAt': 'indexedAt',
+      '#indexingStatus': 'indexingStatus',
     },
     ExpressionAttributeValues: {
       ':summary': { S: summary },
@@ -404,6 +405,7 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
       ':relatedIds': { SS: relatedIds.length > 0 ? relatedIds : ['none'] },
       ':embeddingId': { S: thoughtData.id },
       ':indexedAt': { N: Date.now().toString() },
+      ':indexingStatus': { S: 'indexed' },
     },
   }));
   

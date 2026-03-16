@@ -10,7 +10,7 @@ marked.setOptions({ breaks: true, gfm: true })
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
-const { ask, isLoading: askLoading } = useAsk()
+const { ask, isLoading: askLoading, error: askError } = useAsk()
 
 const askQuery = ref('')
 const askTimeWindow = ref<number | undefined>(undefined)
@@ -34,10 +34,11 @@ const close = () => emit('update:modelValue', false)
 const handleAsk = async () => {
   if (!askQuery.value.trim()) return
   askResponse.value = null
+  askError.value = null
   try {
     askResponse.value = await ask(askQuery.value, askTimeWindow.value)
   } catch (e) {
-    console.error('Ask failed:', e)
+    // Error is already set in useAsk composable
   }
 }
 
@@ -83,6 +84,11 @@ watch(() => props.modelValue, (open) => {
                 {{ tw.label }}
               </button>
             </div>
+          </div>
+
+          <!-- Error -->
+          <div v-if="askError" class="mx-4 mt-3 px-4 py-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg">
+            {{ askError }}
           </div>
 
           <!-- Response -->

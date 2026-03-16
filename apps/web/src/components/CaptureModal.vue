@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { detectType } from '@/lib/typeDetection'
-import { extractTags } from '@/lib/tagExtraction'
+import { detectThoughtType, extractTags } from '@ragbrain/shared'
 import { useThoughts } from '@/composables/useThoughts'
 import type { ThoughtType } from '@/types'
 
@@ -12,10 +11,11 @@ const { createThought } = useThoughts()
 
 const captureContent = ref('')
 const captureTypeOverride = ref<ThoughtType | null>(null)
-const detectedType = computed<ThoughtType>(() => detectType(captureContent.value))
+const detectedType = computed<ThoughtType>(() => detectThoughtType(captureContent.value))
 const captureType = computed<ThoughtType>(() => captureTypeOverride.value || detectedType.value)
 const captureTags = computed(() => extractTags(captureContent.value))
 const isSaving = ref(false)
+const saveError = ref<string | null>(null)
 const typeDropdownOpen = ref(false)
 const captureTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
@@ -40,12 +40,13 @@ const close = () => emit('update:modelValue', false)
 const handleSave = async () => {
   if (!captureContent.value.trim()) return
   isSaving.value = true
+  saveError.value = null
   try {
     await createThought(captureContent.value, captureType.value, captureTags.value)
     captureContent.value = ''
     close()
   } catch (e) {
-    console.error('Failed to save:', e)
+    saveError.value = e instanceof Error ? e.message : 'Failed to save thought'
   } finally {
     isSaving.value = false
   }
@@ -115,6 +116,10 @@ watch(() => props.modelValue, (open) => {
               @keydown.meta.enter.prevent="handleSave"
               @keydown.ctrl.enter.prevent="handleSave"
             />
+          </div>
+
+          <div v-if="saveError" class="mx-6 mb-2 px-4 py-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg">
+            {{ saveError }}
           </div>
 
           <div class="flex items-center justify-between px-6 py-4 border-t border-border-secondary">

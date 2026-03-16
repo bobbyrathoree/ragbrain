@@ -1,5 +1,47 @@
-export type ThoughtType = 'thought' | 'decision' | 'insight' | 'code' | 'todo' | 'link'
+/**
+ * Frontend types — re-exported from @ragbrain/shared (single source of truth)
+ * plus frontend-specific extensions.
+ *
+ * Previously a 126-line standalone file that drifted from the backend types.
+ * Now the web app, Lambda handlers, and shared package all use the same definitions.
+ */
+import type {
+  ThoughtType as SharedThoughtType,
+  Citation as SharedCitation,
+  GraphNode as SharedGraphNode,
+  GraphEdge as SharedGraphEdge,
+  GraphTheme as SharedGraphTheme,
+  ConversationSummary as SharedConvSummary,
+  ConversationMessage as SharedConvMessage,
+  GalaxyOverview as SharedGalaxyOverview,
+  GalaxyTheme as SharedGalaxyTheme,
+  ThemeAffinity as SharedThemeAffinity,
+  ConstellationView as SharedConstellationView,
+  ConstellationNode as SharedConstellationNode,
+  ConstellationEdge as SharedConstellationEdge,
+} from '@ragbrain/shared'
 
+// Re-export core types
+export type ThoughtType = SharedThoughtType
+export type Citation = SharedCitation
+export type GraphEdge = SharedGraphEdge
+export type GraphTheme = SharedGraphTheme
+export type ConversationSummary = SharedConvSummary
+export type ConversationMessage = SharedConvMessage
+
+// Galaxy graph types (LOD-based)
+export type GalaxyOverview = SharedGalaxyOverview
+export type GalaxyTheme = SharedGalaxyTheme
+export type ThemeAffinity = SharedThemeAffinity
+export type ConstellationView = SharedConstellationView
+export type ConstellationNode = SharedConstellationNode
+export type ConstellationEdge = SharedConstellationEdge
+
+// Re-export the const for runtime usage (type detection list)
+export { ThoughtType as ThoughtTypeValues } from '@ragbrain/shared'
+
+// Frontend Thought — matches the shape returned by GET /thoughts
+// (subset of the full Thought model which includes user, derived, sync fields)
 export interface Thought {
   id: string
   text: string
@@ -7,8 +49,10 @@ export interface Thought {
   tags: string[]
   createdAt: string
   updatedAt?: string
+  indexingStatus?: 'pending' | 'indexed' | 'failed'
 }
 
+// AskResponse with required confidence/processingTime for frontend display
 export interface AskResponse {
   answer: string
   confidence: number
@@ -16,47 +60,10 @@ export interface AskResponse {
   processingTime: number
 }
 
-export interface Citation {
-  id: string
-  preview: string
-  type: string
-  score: number
-  createdAt: string
-  tags?: string[]
-}
+// Legacy GraphNode (backward compat with old graph view)
+export type GraphNode = SharedGraphNode
 
-export interface GraphNode {
-  id: string
-  label: string
-  themeId: string
-  x: number
-  y: number
-  tags: string[]
-  recency: number
-  importance: number
-  type: string
-  // D3 force simulation adds these dynamically
-  vx?: number
-  vy?: number
-  fx?: number | null
-  fy?: number | null
-}
-
-export interface GraphEdge {
-  source: string
-  target: string
-  similarity: number
-}
-
-export interface GraphTheme {
-  id: string
-  label: string
-  description: string
-  color: string
-  count: number
-  sampleThoughts: { id: string; text: string }[]
-}
-
+// Frontend search types
 export interface SearchResult {
   id: string
   text: string
@@ -73,25 +80,21 @@ export interface SearchResponse {
   processingTime: number
 }
 
-export interface ConversationSummary {
-  id: string
-  title: string
-  createdAt: string
-  updatedAt: string
-  messageCount: number
-  status: 'active' | 'archived'
+// Graph data bundle used by GraphView
+export interface GraphData {
+  themes: GraphTheme[]
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  metadata?: {
+    totalNodes: number
+    totalEdges: number
+    totalThemes: number
+    generatedAt: string
+    algorithm: string
+  }
 }
 
-export interface ConversationMessage {
-  id: string
-  conversationId: string
-  role: 'user' | 'assistant'
-  content: string
-  citations?: Citation[]
-  confidence?: number
-  createdAt: string
-}
-
+// Conversation detail view
 export interface ConversationDetail {
   conversation: ConversationSummary
   messages: ConversationMessage[]
@@ -109,17 +112,4 @@ export interface SendMessageResponse {
   userMessage: ConversationMessage
   assistantMessage: ConversationMessage
   processingTime: number
-}
-
-export interface GraphData {
-  themes: GraphTheme[]
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  metadata?: {
-    totalNodes: number
-    totalEdges: number
-    totalThemes: number
-    generatedAt: string
-    algorithm: string
-  }
 }

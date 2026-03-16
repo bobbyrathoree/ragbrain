@@ -1,136 +1,74 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { Client } from '@opensearch-project/opensearch';
-import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
-import { defaultProvider } from '@aws-sdk/credential-provider-node';
+import {
+  createOpenSearchClient,
+  getAuthUser,
+  validationError,
+  internalError,
+  jsonResponse,
+} from '../../lib/shared';
+import type { SearchHit } from '../../lib/shared';
 
-const {
-  SEARCH_ENDPOINT,
-  SEARCH_COLLECTION,
-  AWS_REGION,
-} = process.env;
-
-const opensearchClient = new Client({
-  ...AwsSigv4Signer({
-    region: AWS_REGION!,
-    service: 'aoss',
-    getCredentials: defaultProvider(),
-  }),
-  node: SEARCH_ENDPOINT,
-});
-
-interface SearchHit {
-  _id: string;
-  _score: number;
-  _source: {
-    id: string;
-    text: string;
-    summary?: string;
-    tags: string[];
-    type: string;
-    created_at_epoch: number;
-    user: string;
-    docType?: string;
-  };
-  highlight?: {
-    text?: string[];
-    summary?: string[];
-  };
-}
+const opensearch = createOpenSearchClient();
+const SEARCH_COLLECTION = process.env.SEARCH_COLLECTION!;
 
 export const handler = async (
-  event: APIGatewayProxyEventV2
+  event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyResultV2> => {
   const startTime = Date.now();
 
   try {
-    const user = event.requestContext.authorizer?.lambda?.user;
-    if (!user) {
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'Authentication context missing' }),
-      };
-    }
+    const userOrError = getAuthUser(event);
+    if (typeof userOrError !== 'string') return userOrError;
+    const user = userOrError;
 
     const params = event.queryStringParameters || {};
     const query = params.q;
 
-    if (!query || query.trim().length === 0) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'Query parameter "q" is required' }),
-      };
-    }
+    if (!query?.trim()) return validationError('Query parameter "q" is required');
 
     const limit = Math.min(parseInt(params.limit || '20', 10), 100);
 
-    // Build filter conditions
+    // Build filters
     const must: any[] = [
       { term: { user } },
-    ];
-
-    // Only search thoughts, not conversations
-    must.push({
-      bool: {
-        should: [
-          { term: { docType: 'thought' } },
-          { bool: { must_not: { exists: { field: 'docType' } } } },
-        ],
-      },
-    });
-
-    if (params.type) {
-      must.push({ term: { type: params.type } });
-    }
-
-    if (params.tag) {
-      must.push({ terms: { tags: params.tag.split(',') } });
-    }
-
-    if (params.from) {
-      must.push({
-        range: {
-          created_at_epoch: { gte: new Date(params.from).getTime() },
-        },
-      });
-    }
-
-    // BM25 text search - no embeddings, no LLM
-    const searchBody = {
-      size: limit,
-      query: {
+      // Only search thoughts, not conversations
+      {
         bool: {
-          must: [
-            {
-              multi_match: {
-                query: query.trim(),
-                fields: ['text^2', 'summary^1.5', 'tags'],
-                type: 'best_fields',
-                fuzziness: 'AUTO',
-              },
-            },
-            ...must,
+          should: [
+            { term: { docType: 'thought' } },
+            { bool: { must_not: { exists: { field: 'docType' } } } },
           ],
         },
       },
-      highlight: {
-        fields: {
-          text: { fragment_size: 150, number_of_fragments: 2 },
-          summary: { fragment_size: 150, number_of_fragments: 1 },
-        },
-        pre_tags: ['<mark>'],
-        post_tags: ['</mark>'],
-      },
-      sort: [
-        { _score: { order: 'desc' } },
-        { created_at_epoch: { order: 'desc' } },
-      ],
-    };
+    ];
 
-    const response = await opensearchClient.search({
+    if (params.type) must.push({ term: { type: params.type } });
+    if (params.tag) must.push({ terms: { tags: params.tag.split(',') } });
+    if (params.from) must.push({ range: { created_at_epoch: { gte: new Date(params.from).getTime() } } });
+
+    // BM25 text search — no embeddings, no LLM
+    const response = await opensearch.search({
       index: `${SEARCH_COLLECTION}-thoughts`,
-      body: searchBody,
+      body: {
+        size: limit,
+        query: {
+          bool: {
+            must: [
+              { multi_match: { query: query.trim(), fields: ['text^2', 'summary^1.5', 'tags'], type: 'best_fields', fuzziness: 'AUTO' } },
+              ...must,
+            ],
+          },
+        },
+        highlight: {
+          fields: {
+            text: { fragment_size: 150, number_of_fragments: 2 },
+            summary: { fragment_size: 150, number_of_fragments: 1 },
+          },
+          pre_tags: ['<mark>'],
+          post_tags: ['</mark>'],
+        },
+        sort: [{ _score: { order: 'desc' } }, { created_at_epoch: { order: 'desc' } }],
+      },
     });
 
     const hits = (response.body.hits.hits || []) as SearchHit[];
@@ -149,30 +87,9 @@ export const handler = async (
     }));
 
     const processingTime = Date.now() - startTime;
-
-    return {
-      statusCode: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Processing-Time': processingTime.toString(),
-      },
-      body: JSON.stringify({
-        results,
-        totalCount,
-        processingTime,
-      }),
-    };
-
+    return jsonResponse(200, { results, totalCount, processingTime }, { 'X-Processing-Time': processingTime.toString() });
   } catch (error) {
     console.error('Search error:', error);
-
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        error: 'Search failed',
-        requestId: event.requestContext.requestId,
-      }),
-    };
+    return internalError('Search failed', event.requestContext.requestId);
   }
 };

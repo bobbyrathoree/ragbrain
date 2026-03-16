@@ -25,5 +25,5 @@
     "rootDir": "lib"
   },
   "include": ["lib/**/*"],
-  "exclude": ["node_modules", "cdk.out", "dist"]
+  "exclude": ["node_modules", "cdk.out", "dist", "lib/shared"]
 }
