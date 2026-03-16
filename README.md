@@ -52,10 +52,10 @@ Your thoughts organized as an interactive galaxy. Theme clusters emerge automati
 |:-:|:-:|
 | <img src="docs/screenshots/galaxy.png" alt="Galaxy" width="100%"> | <img src="docs/screenshots/constellation.png" alt="Constellation" width="100%"> |
 
-- **Galaxy view** -- Theme bubbles with orbiting particles, glass highlights, and flowing affinity lines
-- **Constellation view** -- Thought nodes with type icons, D3 force physics, drag interaction, and breathing edges
-- **ThoughtDrawer** -- Click any node to see full text, tags, and connected thoughts. Navigate node-to-node.
-- **Zoom & drag** -- Scroll to zoom, drag background to pan, drag nodes to rearrange
+- **Galaxy view** - Theme bubbles with orbiting particles, glass highlights, and flowing affinity lines
+- **Constellation view** - Thought nodes with type icons, D3 force physics, drag interaction, and breathing edges
+- **ThoughtDrawer** - Click any node to see full text, tags, and connected thoughts. Navigate node-to-node.
+- **Zoom & drag** - Scroll to zoom, drag background to pan, drag nodes to rearrange
 
 ### Brain Pulse (Timeline)
 
@@ -75,10 +75,10 @@ Have conversations with your knowledge base. Ask follow-up questions with full c
 
 ### AI-Powered Intelligence
 
-- **Smart Auto-Tagging** -- Claude extracts semantic tags, categories, intent, and entities
-- **Related Thoughts** -- k-NN vector similarity finds connected ideas
-- **Summaries** -- Automatic one-sentence summarization
-- **Deterministic Clustering** -- Seeded K-means so clusters stay stable across sessions
+- **Smart Auto-Tagging** - Claude extracts semantic tags, categories, intent, and entities
+- **Related Thoughts** - k-NN vector similarity finds connected ideas
+- **Summaries** - Automatic one-sentence summarization
+- **Deterministic Clustering** - Seeded K-means so clusters stay stable across sessions
 
 ---
 
@@ -221,8 +221,8 @@ npx cdk deploy --all --context env=dev
 ```
 
 Note the outputs:
-- `ApiUrl` -- Your API Gateway endpoint
-- `ApiKeySecretArn` -- Secret containing your API key
+- `ApiUrl` - Your API Gateway endpoint
+- `ApiKeySecretArn` - Secret containing your API key
 
 Retrieve your API key:
 ```bash
@@ -317,11 +317,11 @@ All endpoints require `x-api-key` header.
 
 ## Design Principles
 
-1. **Speed first** -- Capture in under 2 seconds, never block the user
-2. **Citations required** -- Every AI answer references source notes
-3. **Privacy focused** -- Your data in your AWS account, KMS encrypted at rest
-4. **Progressive disclosure** -- Galaxy overview first, drill into details on demand
-5. **Deterministic clustering** -- Same thoughts always produce the same graph
+1. **Speed first** - Capture in under 2 seconds, never block the user
+2. **Citations required** - Every AI answer references source notes
+3. **Privacy focused** - Your data in your AWS account, KMS encrypted at rest
+4. **Progressive disclosure** - Galaxy overview first, drill into details on demand
+5. **Deterministic clustering** - Same thoughts always produce the same graph
 
 ---
 
