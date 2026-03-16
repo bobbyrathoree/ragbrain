@@ -1,10 +1,5 @@
-<!-- Logo placeholder: replace with generated banner -->
-<!-- <p align="center"><img src="docs/banner.png" alt="Ragbrain" width="100%"></p> -->
-
-<h1 align="center">Ragbrain</h1>
-
 <p align="center">
-  <strong>Capture everything. Ask anything. See how it connects.</strong>
+  <img src="docs/banner.png" alt="Ragbrain" width="100%">
 </p>
 
 <p align="center">
