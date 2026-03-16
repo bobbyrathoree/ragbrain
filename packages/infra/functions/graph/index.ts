@@ -74,6 +74,30 @@ function truncateText(text: string, maxLen: number): string {
   return text.slice(0, maxLen).trim() + '…';
 }
 
+// ============ Seeded PRNG (deterministic clustering) ============
+
+/** Simple mulberry32 PRNG — same seed always produces same sequence */
+function createSeededRandom(seed: number): () => number {
+  return () => {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed)
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t
+    return ((t ^ t >>> 14) >>> 0) / 4294967296
+  }
+}
+
+/** Generate a deterministic seed from thought IDs */
+function hashThoughtIds(ids: string[]): number {
+  let hash = 0
+  const str = ids.sort().join('')
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + ch
+    hash |= 0
+  }
+  return hash
+}
+
 // ============ K-means Clustering ============
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -103,13 +127,14 @@ function vectorMean(vectors: number[][]): number[] {
 
 function initializeCentroidsKMeansPlusPlus(
   embeddings: number[][],
-  k: number
+  k: number,
+  random: () => number = Math.random,
 ): number[][] {
   const centroids: number[][] = [];
   const n = embeddings.length;
 
-  // Choose first centroid randomly
-  const firstIdx = Math.floor(Math.random() * n);
+  // Choose first centroid deterministically
+  const firstIdx = Math.floor(random() * n);
   centroids.push([...embeddings[firstIdx]]);
 
   // Choose remaining centroids with probability proportional to distance²
@@ -118,19 +143,17 @@ function initializeCentroidsKMeansPlusPlus(
     let totalDist = 0;
 
     for (const embedding of embeddings) {
-      // Find distance to nearest existing centroid
       let minDist = Infinity;
       for (const centroid of centroids) {
         const sim = cosineSimilarity(embedding, centroid);
-        const dist = 1 - sim; // Convert similarity to distance
+        const dist = 1 - sim;
         if (dist < minDist) minDist = dist;
       }
-      distances.push(minDist * minDist); // Square the distance
+      distances.push(minDist * minDist);
       totalDist += minDist * minDist;
     }
 
-    // Choose next centroid with probability proportional to distance²
-    let threshold = Math.random() * totalDist;
+    let threshold = random() * totalDist;
     let cumSum = 0;
     for (let i = 0; i < n; i++) {
       cumSum += distances[i];
@@ -140,9 +163,8 @@ function initializeCentroidsKMeansPlusPlus(
       }
     }
 
-    // Fallback if we didn't select (shouldn't happen)
     if (centroids.length <= c) {
-      centroids.push([...embeddings[Math.floor(Math.random() * n)]]);
+      centroids.push([...embeddings[Math.floor(random() * n)]]);
     }
   }
 
@@ -151,7 +173,8 @@ function initializeCentroidsKMeansPlusPlus(
 
 function kMeansClustering(
   thoughts: ThoughtWithEmbedding[],
-  k: number
+  k: number,
+  random: () => number = Math.random,
 ): Map<number, string[]> {
   if (thoughts.length === 0) return new Map();
   if (thoughts.length <= k) {
@@ -168,7 +191,7 @@ function kMeansClustering(
   const maxIterations = 50;
 
   // Initialize centroids using k-means++
-  let centroids = initializeCentroidsKMeansPlusPlus(embeddings, k);
+  let centroids = initializeCentroidsKMeansPlusPlus(embeddings, k, random);
   let assignments = new Array(n).fill(0);
 
   for (let iter = 0; iter < maxIterations; iter++) {
@@ -697,8 +720,11 @@ async function handleLODRequest(
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(empty) };
   }
 
+  // Seeded PRNG so same thoughts always produce same clusters
+  const seed = hashThoughtIds(thoughts.map(t => t.id));
+  const random = createSeededRandom(seed);
   const k = calculateOptimalK(thoughts.length);
-  const clusterMap = kMeansClustering(thoughts, k);
+  const clusterMap = kMeansClustering(thoughts, k, random);
   const thoughtsById = new Map(thoughts.map(t => [t.id, t]));
 
   // Build cluster → theme mapping
@@ -926,9 +952,11 @@ export const handler = async (
       };
     }
 
-    // Calculate optimal K and run K-means clustering
+    // Seeded PRNG — same thoughts always produce same clusters
+    const seed = hashThoughtIds(thoughts.map(t => t.id));
+    const random = createSeededRandom(seed);
     const k = calculateOptimalK(thoughts.length);
-    const clusterMap = kMeansClustering(thoughts, k);
+    const clusterMap = kMeansClustering(thoughts, k, random);
 
     // Build reverse lookup: thoughtId -> clusterId
     const thoughtToCluster = new Map<string, number>();
