@@ -153,8 +153,9 @@ test-results/
 # Superpowers brainstorm
 .superpowers/
 
-# Screenshots
+# Screenshots (allow docs/screenshots/)
 *.png
+!docs/screenshots/*.png
 
 # Keep these
 !.gitkeep
