@@ -277,55 +277,6 @@ Open http://localhost:5173
 
 ---
 
-## Project Structure
-
-```
-ragbrain/
-├── apps/
-│   └── web/                        # Vue 3 frontend
-│       ├── src/
-│       │   ├── api/                # API client with legacy fallback
-│       │   ├── components/
-│       │   │   └── views/
-│       │   │       ├── graph/      # Knowledge Galaxy (Canvas 2D + D3)
-│       │   │       │   ├── CanvasRenderer.ts
-│       │   │       │   ├── ThoughtDrawer.vue
-│       │   │       │   └── useGraphNavigation.ts
-│       │   │       ├── FeedView.vue
-│       │   │       ├── GraphView.vue
-│       │   │       ├── TimelineView.vue
-│       │   │       └── ChatView.vue
-│       │   ├── composables/        # Vue composables
-│       │   ├── types/              # Re-exports from @ragbrain/shared
-│       │   └── lib/                # Utilities
-│       └── index.html
-├── packages/
-│   ├── infra/                      # AWS CDK infrastructure
-│   │   ├── lib/
-│   │   │   ├── stacks/            # 5 CDK stacks
-│   │   │   └── shared/            # Shared backend library
-│   │   │       ├── search.ts      # Hybrid search, scoring, embeddings
-│   │   │       ├── metrics.ts     # CloudWatch metrics helper
-│   │   │       ├── responses.ts   # Standardized API responses
-│   │   │       ├── clients.ts     # AWS client factories
-│   │   │       └── config.ts      # Model IDs, search weights
-│   │   └── functions/             # Lambda handlers
-│   │       ├── capture/           # Thought capture + S3 + SQS
-│   │       ├── ask/               # Hybrid search + Claude answers
-│   │       ├── graph/             # K-means + LOD tiling + LLM labels
-│   │       ├── indexer/           # Embeddings + smart tags + OpenSearch
-│   │       ├── conversations/     # Encrypted multi-turn chat
-│   │       ├── thoughts/          # CRUD + filtering
-│   │       ├── search/            # BM25 text search
-│   │       ├── authorizer/        # API key + rate limiting
-│   │       └── export/            # Obsidian sync export
-│   ├── shared/                    # Shared TypeScript types + utils
-│   └── tests/                     # API, security, performance tests
-└── design/                        # Technical design docs
-```
-
----
-
 ## Tech Stack
 
 | Layer | Technology |
@@ -376,7 +327,7 @@ All endpoints require `x-api-key` header.
 
 ## License
 
-MIT (c) Bobby Rathore
+[MIT](LICENSE)
 
 ---
 
