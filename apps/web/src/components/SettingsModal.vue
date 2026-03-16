@@ -7,7 +7,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
 const { fetchThoughts } = useThoughts()
 
-const apiKey = ref(localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || '')
+const apiKey = ref(localStorage.getItem('ragbrain_api_key') || '')
 const apiEndpoint = ref(localStorage.getItem('ragbrain_api_endpoint') || import.meta.env.VITE_API_ENDPOINT || '')
 
 const theme = ref<'light' | 'dark'>(
@@ -26,7 +26,7 @@ const close = () => emit('update:modelValue', false)
 const handleExport = async () => {
   try {
     const baseUrl = localStorage.getItem('ragbrain_api_endpoint') || import.meta.env.VITE_API_ENDPOINT || ''
-    const key = localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || ''
+    const key = localStorage.getItem('ragbrain_api_key') || ''
     const res = await fetch(`${baseUrl}/export`, {
       headers: { 'Content-Type': 'application/json', ...(key && { 'x-api-key': key }) },
     })
@@ -102,9 +102,13 @@ const saveSettings = () => {
               <input
                 v-model="apiKey"
                 type="password"
+                autocomplete="off"
                 placeholder="Enter your API key"
                 class="w-full px-3 py-2 bg-bg-tertiary border border-border-secondary rounded-lg text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-primary"
               />
+              <p class="mt-2 text-xs text-text-tertiary">
+                Stored only in this browser after you save it. Build-time API keys are no longer supported.
+              </p>
             </div>
 
             <!-- Save -->

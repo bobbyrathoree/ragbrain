@@ -6,6 +6,7 @@ import {
   internalError,
   jsonResponse,
 } from '../../lib/shared';
+import { sanitizeHighlightSnippet } from '../../lib/shared/sanitization';
 import type { SearchHit } from '../../lib/shared';
 
 const opensearch = createOpenSearchClient();
@@ -82,7 +83,9 @@ export const handler = async (
       type: hit._source.type,
       tags: hit._source.tags || [],
       score: hit._score,
-      highlight: hit.highlight?.text?.[0] || hit.highlight?.summary?.[0] || undefined,
+      highlight: sanitizeHighlightSnippet(
+        hit.highlight?.text?.[0] || hit.highlight?.summary?.[0] || undefined,
+      ),
       createdAt: new Date(hit._source.created_at_epoch).toISOString(),
     }));
 

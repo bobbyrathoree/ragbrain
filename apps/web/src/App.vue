@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useThoughts } from '@/composables/useThoughts'
 import CaptureModal from '@/components/CaptureModal.vue'
 import AskModal from '@/components/AskModal.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
@@ -9,7 +8,6 @@ import CommandPalette from '@/components/CommandPalette.vue'
 
 const router = useRouter()
 const route = useRoute()
-const { fetchThoughts } = useThoughts()
 
 // Modal states
 const captureOpen = ref(false)
@@ -23,13 +21,11 @@ const theme = (localStorage.getItem('ragbrain_theme') as 'light' | 'dark') ||
 
 onMounted(() => {
   document.documentElement.classList.toggle('dark', theme === 'dark')
-  const apiKey = localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY
-  if (apiKey) fetchThoughts()
 })
 
 // Export handler
 const exportData = async () => {
-  const apiKey = localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || ''
+  const apiKey = localStorage.getItem('ragbrain_api_key') || ''
   const baseUrl = localStorage.getItem('ragbrain_api_endpoint') || import.meta.env.VITE_API_ENDPOINT || ''
   try {
     const res = await fetch(`${baseUrl}/export`, {

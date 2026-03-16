@@ -91,7 +91,9 @@ watch(messages, () => scrollToBottom(), { deep: true })
 
 // Focus input when view loads
 onMounted(() => {
-  fetchConversations()
+  if (localStorage.getItem('ragbrain_api_key')) {
+    fetchConversations()
+  }
   nextTick(() => inputRef.value?.focus())
 })
 </script>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import DOMPurify from 'dompurify'
 import { useThoughts } from '@/composables/useThoughts'
 import { useSearch } from '@/composables/useSearch'
 import { thoughtsApi } from '@/api'
@@ -166,6 +167,9 @@ const truncate = (content: string) => {
   return content.slice(0, MAX_LENGTH).trim() + '…'
 }
 
+const renderSearchHighlight = (snippet: string) =>
+  DOMPurify.sanitize(snippet, { ALLOWED_TAGS: ['mark'], ALLOWED_ATTR: [] })
+
 const formatTime = (date: string) => {
   const d = new Date(date)
   const now = new Date()
@@ -211,7 +215,9 @@ const typeFilters: Array<{ value: ThoughtType | 'all'; label: string }> = [
 ]
 
 onMounted(() => {
-  fetchThoughts()
+  if (localStorage.getItem('ragbrain_api_key')) {
+    fetchThoughts()
+  }
 
   // Setup Intersection Observer for infinite scroll
   observer = new IntersectionObserver(
@@ -332,7 +338,7 @@ onUnmounted(() => {
             <p
               v-if="result.highlight"
               class="text-[15px] leading-relaxed text-text-primary"
-              v-html="result.highlight"
+              v-html="renderSearchHighlight(result.highlight)"
             />
             <p v-else class="text-[15px] leading-relaxed text-text-primary">
               {{ truncate(result.text) }}

@@ -89,7 +89,9 @@ const todoAgeClass = (date: string) => {
 }
 
 onMounted(() => {
-  fetchThoughts(200)
+  if (localStorage.getItem('ragbrain_api_key')) {
+    fetchThoughts(200)
+  }
 })
 </script>
 

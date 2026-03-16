@@ -126,7 +126,9 @@ export class ApiStack extends cdk.Stack {
       {
         responseTypes: [apigatewayAuthorizers.HttpLambdaResponseType.SIMPLE],
         identitySource: ['$request.header.x-api-key'],
-        resultsCacheTtl: cdk.Duration.minutes(5),
+        // Rate limiting and revocation happen inside the authorizer, so the decision must
+        // be recomputed per request instead of being cached at the gateway layer.
+        resultsCacheTtl: cdk.Duration.seconds(0),
       }
     );
 

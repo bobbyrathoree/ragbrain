@@ -38,7 +38,8 @@
     "test:unit:authorizer": "tsx src/unit/authorizer.test.ts",
     "test:pipeline:indexing": "tsx src/pipeline/indexing.test.ts",
     "test:pipeline:search": "tsx src/pipeline/search.test.ts",
-    "test:infra:stacks": "tsx src/infrastructure/stacks.test.ts"
+    "test:infra:stacks": "tsx src/infrastructure/stacks.test.ts",
+    "test:local:security-hardening": "tsx src/local/security-hardening.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.7.0",

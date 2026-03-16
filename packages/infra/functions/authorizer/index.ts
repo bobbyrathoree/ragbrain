@@ -7,6 +7,11 @@ import {
   UpdateItemCommand,
   GetItemCommand,
 } from '@aws-sdk/client-dynamodb';
+import {
+  getApiKeyFromHeaders,
+  parseApiKeySecret,
+  resolveCredentialForApiKey,
+} from '../../lib/shared/auth';
 
 const secretsManager = new SecretsManagerClient({});
 const dynamodb = new DynamoDBClient({});
@@ -34,15 +39,15 @@ interface AuthorizerResult {
 
 const rateLimit = parseInt(RATE_LIMIT_PER_HOUR);
 
-// Cache API key to avoid repeated Secrets Manager calls
-let cachedApiKey: string | null = null;
+// Cache parsed credentials to avoid repeated Secrets Manager calls
+let cachedCredentials: ReturnType<typeof parseApiKeySecret> | null = null;
 let cacheExpiry = 0;
 const CACHE_TTL_MS = 300000; // 5 minutes
 
-async function getApiKey(): Promise<string> {
+async function getCredentials() {
   const now = Date.now();
-  if (cachedApiKey && now < cacheExpiry) {
-    return cachedApiKey;
+  if (cachedCredentials && now < cacheExpiry) {
+    return cachedCredentials;
   }
 
   const secret = await secretsManager.send(
@@ -51,11 +56,10 @@ async function getApiKey(): Promise<string> {
     })
   );
 
-  const { key } = JSON.parse(secret.SecretString || '{}');
-  cachedApiKey = key;
+  cachedCredentials = parseApiKeySecret(secret.SecretString || '{}');
   cacheExpiry = now + CACHE_TTL_MS;
 
-  return key;
+  return cachedCredentials;
 }
 
 async function checkRateLimit(
@@ -135,7 +139,7 @@ async function checkRateLimit(
 export const handler = async (
   event: AuthorizerEvent
 ): Promise<AuthorizerResult> => {
-  const apiKey = event.headers['x-api-key'];
+  const apiKey = getApiKeyFromHeaders(event.headers);
 
   if (!apiKey) {
     console.log('No API key provided');
@@ -143,15 +147,15 @@ export const handler = async (
   }
 
   try {
-    const validKey = await getApiKey();
+    const credentials = await getCredentials();
+    const credential = resolveCredentialForApiKey(apiKey, credentials);
 
-    if (apiKey !== validKey) {
+    if (!credential) {
       console.log('Invalid API key');
       return { isAuthorized: false };
     }
 
-    // For v1, single user mode
-    const userId = 'dev';
+    const userId = credential.userId;
 
     // Check rate limit
     const { allowed, remaining, retryAfter } = await checkRateLimit(userId);

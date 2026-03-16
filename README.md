@@ -236,8 +236,9 @@ aws secretsmanager get-secret-value \
 Create `apps/web/.env.local`:
 ```
 VITE_API_ENDPOINT=https://your-api-id.execute-api.us-west-2.amazonaws.com/dev
-VITE_API_KEY=your-api-key
 ```
+
+Then start the app and enter your API key in the in-app Settings modal. Avoid shipping the API key in Vite env vars, because those values are bundled into the client.
 
 ### 4. Run
 

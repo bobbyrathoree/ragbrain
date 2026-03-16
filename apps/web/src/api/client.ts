@@ -1,5 +1,5 @@
-// Use localStorage override, fallback to env vars
-const getApiKey = () => localStorage.getItem('ragbrain_api_key') || import.meta.env.VITE_API_KEY || ''
+// API keys stay in browser storage; only the endpoint can come from env config.
+const getApiKey = () => localStorage.getItem('ragbrain_api_key') || ''
 const getBaseUrl = () => localStorage.getItem('ragbrain_api_endpoint') || import.meta.env.VITE_API_ENDPOINT || ''
 
 class ApiError extends Error {
@@ -10,8 +10,18 @@ class ApiError extends Error {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${getBaseUrl()}${endpoint}`
+  const baseUrl = getBaseUrl()
   const apiKey = getApiKey()
+
+  if (!baseUrl) {
+    throw new ApiError(500, 'API endpoint is not configured')
+  }
+
+  if (!apiKey) {
+    throw new ApiError(401, 'API key is not configured')
+  }
+
+  const url = `${baseUrl}${endpoint}`
 
   const response = await fetch(url, {
     ...options,
