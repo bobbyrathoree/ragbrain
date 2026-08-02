@@ -89,7 +89,13 @@ export const handler = async (
         pk: { S: `user#${user}` },
         sk: { S: `ts#${createdAtEpoch}#${thoughtId}` },
         id: { S: thoughtId },
-        text: { S: sanitizedText.substring(0, 1000) },
+        // Full text, not a 1000-char prefix. The Feed and /export read this
+        // attribute and never fall back to S3, so truncating here silently
+        // destroyed the tail of any note over 1000 chars even though
+        // validateThoughtText allows 50000. A 50k-char note is ~50 KB, well
+        // under the 400 KB DynamoDB item limit.
+        // See docs/AUDIT-2026-08.md finding 4.
+        text: { S: sanitizedText },
         type: { S: thoughtType },
         tags: { SS: allTags.length > 0 ? allTags : ['untagged'] },
         createdAt: { N: createdAtEpoch.toString() },
@@ -98,7 +104,7 @@ export const handler = async (
         s3Key: { S: s3Key },
         gsi1pk: { S: `type#${thoughtType}` },
         gsi1sk: { S: `ts#${createdAtEpoch}` },
-        ttl: { N: (Math.floor(Date.now() / 1000) + 31536000).toString() },
+        // No ttl attribute — notes must not expire. See finding 3.
         indexingStatus: { S: 'pending' },
       },
       ConditionExpression: 'attribute_not_exists(pk)',

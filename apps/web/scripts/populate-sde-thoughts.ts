@@ -5,8 +5,16 @@
 
 import { chromium } from 'playwright';
 
-const API_URL = process.env.API_URL || 'https://4xxsak1g64.execute-api.us-west-2.amazonaws.com/dev';
+// Never hardcode a deployed endpoint here — this file is committed.
+const API_URL = process.env.API_URL || '';
 const API_KEY = process.env.API_KEY || '';
+
+if (!API_URL || !API_KEY) {
+  console.error('Set API_URL and API_KEY before running this script, e.g.:');
+  console.error('  API_URL=https://<id>.execute-api.<region>.amazonaws.com/dev \\');
+  console.error('  API_KEY=<key> npx tsx apps/web/scripts/populate-sde-thoughts.ts');
+  process.exit(1);
+}
 
 // Realistic thoughts from an AWS SDE's workday
 const SDE_THOUGHTS = [

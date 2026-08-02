@@ -55,7 +55,18 @@ interface ConversationIndexMessage {
   assistantMessageId?: string;
 }
 
-type IndexMessage = ThoughtIndexMessage | ConversationIndexMessage;
+/** Emitted by the thoughts handler when a note is edited or deleted. */
+interface ThoughtMutationMessage {
+  type: 'reindex' | 'delete';
+  thoughtId: string;
+  user: string;
+  s3Key?: string;
+}
+
+type IndexMessage =
+  | ThoughtIndexMessage
+  | ConversationIndexMessage
+  | ThoughtMutationMessage;
 
 // DynamoDB types for conversations
 interface DynamoConversation {
@@ -326,9 +337,103 @@ async function findRelatedThoughts(thoughtId: string, embedding: number[], user:
   }
 }
 
+/**
+ * Remove a thought from the search index.
+ *
+ * OpenSearch Serverless does NOT support _delete_by_query — it returns 404 for
+ * that endpoint (verified against the deployed collection). So we search for the
+ * document(s) carrying this thought id, then delete each one by its real _id,
+ * which Serverless does support.
+ *
+ * The search is scoped by `user` so one user can never delete another's
+ * document. Historic documents were indexed without an explicit _id, so there
+ * may be more than one copy; deleting all matches also cleans up duplicates
+ * left by earlier re-indexing. New documents set _id explicitly (see
+ * processThought), making this a single-hit lookup going forward.
+ *
+ * See docs/AUDIT-2026-08.md finding 5.
+ */
+async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<void> {
+  // No explicit index mapping is created for this index, so dynamic mapping
+  // makes `id` analyzed text with a `.keyword` subfield. A term query on the
+  // analyzed field never matches, because ids like
+  // "t_c75f2207-fd05-42f6-884d-86b1a854ad92" are tokenised on _ and -; that
+  // silently turned every delete into a no-op. Query the .keyword subfield for
+  // exact matching, and re-verify _source before deleting so we can never
+  // delete another user's document.
+  // OpenSearch Serverless has a visibility lag (~10s observed) between indexing
+  // a document and it becoming searchable. A delete issued shortly after capture
+  // would otherwise find nothing and leave the document orphaned in the index
+  // forever. Retry with backoff so the delete waits for the document to appear.
+  const attemptDelays = [0, 5_000, 10_000, 15_000, 20_000];
+  let hits: any[] = [];
+
+  for (const delay of attemptDelays) {
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+
+    const found = await opensearchClient.search({
+      index: `${SEARCH_COLLECTION}-thoughts`,
+      body: {
+        size: 50,
+        _source: ['id', 'user'],
+        query: {
+          bool: {
+            must: [
+              { term: { 'id.keyword': thoughtId } },
+              { term: { 'user.keyword': user } },
+            ],
+          },
+        },
+      },
+    });
+
+    hits = (found.body.hits.hits || [])
+      .filter((h: any) => h._source?.id === thoughtId && h._source?.user === user);
+
+    if (hits.length > 0) break;
+  }
+
+  if (hits.length === 0) {
+    // Either the document was never indexed, or it is still invisible. Throwing
+    // sends the message back to SQS for retry and ultimately to the DLQ, rather
+    // than silently declaring success and orphaning the document.
+    throw new Error(
+      `Thought ${thoughtId} not found in index after ${attemptDelays.length} attempts; retrying via SQS`,
+    );
+  }
+
+  const docIds: string[] = hits.map((h: any) => h._id);
+
+  let deleted = 0;
+  for (const docId of docIds) {
+    try {
+      await opensearchClient.delete({
+        index: `${SEARCH_COLLECTION}-thoughts`,
+        id: docId,
+      });
+      deleted++;
+    } catch (error: any) {
+      // A 404 means it is already gone — that is the desired end state.
+      if (error?.meta?.statusCode !== 404) throw error;
+    }
+  }
+
+  console.log(`Deleted ${deleted}/${docIds.length} document(s) from index for thought ${thoughtId}`);
+
+  await cloudwatch.send(new PutMetricDataCommand({
+    Namespace: PROJECT_NAME,
+    MetricData: [{
+      MetricName: 'IndexDocumentsDeleted',
+      Value: deleted,
+      Unit: 'Count',
+      Dimensions: [{ Name: 'Environment', Value: ENVIRONMENT || 'dev' }],
+    }],
+  })).catch(err => console.error('Failed to emit delete metric:', err));
+}
+
 async function processThought(message: ThoughtIndexMessage): Promise<void> {
   const startTime = Date.now();
-  
+
   // Fetch thought from S3
   const s3Response = await s3.send(new GetObjectCommand({
     Bucket: BUCKET_NAME,
@@ -366,8 +471,10 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
     context: thoughtData.context,
   };
 
-  // For OpenSearch Serverless, use bulk API or index without explicit ID in params
-  // The ID is already in the document body
+  // OpenSearch Serverless rejects an explicit document _id on index operations
+  // ("Document ID is not supported in create/index operation request"), so the
+  // engine assigns one. The thought id lives in the document body and deletes
+  // resolve the real _id via search. Do not add `id:` here.
   await opensearchClient.index({
     index: `${SEARCH_COLLECTION}-thoughts`,
     body: searchDocument,
@@ -407,8 +514,21 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
       ':indexedAt': { N: Date.now().toString() },
       ':indexingStatus': { S: 'indexed' },
     },
-  }));
-  
+    // UpdateItem upserts by default. If the user deleted this thought while
+    // indexing was still in flight, an unconditional update would recreate the
+    // row containing only the derived fields — an id-less, text-less ghost that
+    // the Feed renders as an empty card and that no API call can address.
+    // Require the row to still exist so a delete always wins the race.
+    ConditionExpression: 'attribute_exists(pk)',
+  })).catch((error: any) => {
+    if (error.name === 'ConditionalCheckFailedException') {
+      console.log(`Thought ${thoughtData.id} was deleted during indexing; skipping metadata update`);
+      return;
+    }
+    throw error;
+  });
+
+
   // Emit metrics
   await cloudwatch.send(new PutMetricDataCommand({
     Namespace: PROJECT_NAME,
@@ -662,6 +782,24 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
         console.log(`Processing conversation: ${message.conversationId}`);
         await processConversation(message);
         console.log(`Successfully indexed conversation: ${message.conversationId}`);
+      } else if (message.type === 'delete') {
+        console.log(`Deleting thought from index: ${message.thoughtId}`);
+        await deleteThoughtFromIndex(message.thoughtId, message.user);
+      } else if (message.type === 'reindex') {
+        // processThought indexes with _id = thought id, so this upserts in place.
+        // Any duplicate left by pre-_id indexing is cleared first.
+        console.log(`Re-indexing thought: ${message.thoughtId}`);
+        await deleteThoughtFromIndex(message.thoughtId, message.user);
+        if (message.s3Key) {
+          await processThought({
+            thoughtId: message.thoughtId,
+            user: message.user,
+            s3Key: message.s3Key,
+            createdAt: new Date().toISOString(),
+          });
+        } else {
+          console.error(`Cannot re-index ${message.thoughtId}: no s3Key on message`);
+        }
       } else {
         // Default to thought processing (backwards compatible)
         const thoughtMessage = message as ThoughtIndexMessage;

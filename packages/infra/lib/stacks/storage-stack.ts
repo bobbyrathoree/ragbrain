@@ -104,7 +104,11 @@ export class StorageStack extends cdk.Stack {
       removalPolicy: environment === 'prod'
         ? cdk.RemovalPolicy.RETAIN
         : cdk.RemovalPolicy.DESTROY,
-      timeToLiveAttribute: 'ttl',
+      // NOTE: no timeToLiveAttribute. This table previously expired every item
+      // 365 days after capture, which silently deleted notes from the Feed and
+      // from /export while they remained in OpenSearch. A permanent-memory
+      // product must not expire its own source of truth.
+      // See docs/AUDIT-2026-08.md finding 3.
     });
 
     // Add GSIs for querying

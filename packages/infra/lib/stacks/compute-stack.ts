@@ -242,13 +242,19 @@ export class ComputeStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
-      environment: commonEnv,
+      environment: {
+        ...commonEnv,
+        // Needed to enqueue reindex/delete so the search index follows edits
+        // and deletes. See docs/AUDIT-2026-08.md finding 5.
+        QUEUE_URL: indexQueue.queueUrl,
+      },
       layers: [this.sharedLayer],
       tracing: lambda.Tracing.ACTIVE,
       bundling: bundlingOptions,
     });
 
     thoughtsTable.grantReadWriteData(this.thoughtsLambda);
+    indexQueue.grantSendMessages(this.thoughtsLambda);
 
     // Graph Lambda - builds visualization data
     this.graphLambda = new lambdaNodejs.NodejsFunction(this, 'GraphLambda', {
@@ -271,7 +277,6 @@ export class ComputeStack extends cdk.Stack {
     thoughtsTable.grantReadData(this.graphLambda);
     storageBucket.grantReadWrite(this.graphLambda, 'graph/*');
     this.graphLambda.addToRolePolicy(bedrockPolicy);
-    this.graphLambda.addToRolePolicy(cloudWatchMetricsPolicy);
     this.graphLambda.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -360,6 +365,26 @@ export class ComputeStack extends cdk.Stack {
         ],
       })
     );
+
+    // Every handler calls emitMetrics(), so grant PutMetricData to all of them
+    // in one place rather than per-Lambda. Previously only graphLambda had this
+    // permission, so all custom metrics from the other handlers failed silently
+    // — which in turn made the monitoring dashboard and the SearchHitCount
+    // alarm (built specifically to detect broken indexing) permanently blind.
+    // Applying it to the list means a new Lambda cannot forget it.
+    // See docs/AUDIT-2026-08.md finding 2.
+    for (const fn of [
+      this.captureLambda,
+      this.indexerLambda,
+      this.askLambda,
+      this.thoughtsLambda,
+      this.graphLambda,
+      this.conversationsLambda,
+      this.exportLambda,
+      this.searchLambda,
+    ]) {
+      fn.addToRolePolicy(cloudWatchMetricsPolicy);
+    }
 
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'CaptureLambdaArn', {

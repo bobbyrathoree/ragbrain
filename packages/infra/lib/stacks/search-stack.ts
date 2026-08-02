@@ -63,6 +63,20 @@ export class SearchStack extends cdk.Stack {
     this.searchCollection.addDependency(encryptionPolicy);
     this.searchCollection.addDependency(networkPolicy);
 
+    // COST GUARDRAIL — OCU capacity limits are account-scoped and have NO
+    // CloudFormation resource, so they cannot be set from CDK. They must be
+    // applied once per account via the CLI:
+    //
+    //   aws opensearchserverless update-account-settings \
+    //     --capacity-limits maxIndexingCapacityInOCU=2,maxSearchCapacityInOCU=2
+    //
+    // This matters because OCUs never scale to zero: this collection has a hard
+    // monthly floor (~$175 in dev at $0.24/OCU-hour) and the account default
+    // ceiling is 20 OCUs per type — a worst case in the thousands per month.
+    // Verify with: aws opensearchserverless get-account-settings
+    //
+    // See docs/AUDIT-2026-08.md finding 13.
+
     // IAM role for Lambda access
     const searchRole = new iam.Role(this, 'SearchRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -93,6 +107,11 @@ export class SearchStack extends cdk.Stack {
                 'aoss:CreateIndex',
                 'aoss:UpdateIndex',
                 'aoss:DescribeIndex',
+                // aoss:WriteDocument also authorizes delete-by-query, which the
+                // indexer uses when a thought is deleted or re-indexed. There is
+                // no separate aoss:DeleteDocument permission — verified against
+                // the API, which rejects it as invalid.
+                // See docs/AUDIT-2026-08.md finding 5.
                 'aoss:ReadDocument',
                 'aoss:WriteDocument',
               ],

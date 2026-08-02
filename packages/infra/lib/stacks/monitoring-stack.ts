@@ -1,6 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as budgets from 'aws-cdk-lib/aws-budgets';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -358,6 +360,89 @@ export class MonitoringStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     searchHitAlarm.addAlarmAction(new cloudwatchActions.SnsAction(this.alarmTopic));
+
+    // ── Cost Guardrails ───────────────────────────────────────────
+    //
+    // This stack has a hard monthly floor even at zero traffic — OpenSearch
+    // Serverless OCUs never scale to zero (~$175/mo in dev), plus provisioned
+    // concurrency, a KMS CMK, a secret, and this dashboard. Measured floor at
+    // audit time was ~$207/mo to hold 3.6 KB of notes.
+    //
+    // Two independent tripwires, because they fail differently: the Budget is
+    // forecast-aware but coarse (~8h refresh), while the CloudWatch billing
+    // alarm is near-real-time. See docs/AUDIT-2026-08.md finding 13.
+
+    const monthlyBudgetUsd = environment === 'prod' ? 500 : 250;
+
+    // AWS Budgets publishes as budgets.amazonaws.com, which is NOT covered by
+    // the default topic policy. Without this grant the budget is created
+    // successfully but every notification is silently dropped — a guardrail
+    // that looks armed and is not.
+    this.alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        principals: [new iam.ServicePrincipal('budgets.amazonaws.com')],
+        actions: ['SNS:Publish'],
+        resources: [this.alarmTopic.topicArn],
+        conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
+      }),
+    );
+
+    new budgets.CfnBudget(this, 'MonthlyCostBudget', {
+      budget: {
+        budgetName: `${projectName}-monthly-${environment}`,
+        budgetType: 'COST',
+        timeUnit: 'MONTHLY',
+        budgetLimit: { amount: monthlyBudgetUsd, unit: 'USD' },
+        costFilters: { TagKeyValue: [`user:Project$${projectName}`] },
+      },
+      notificationsWithSubscribers: [
+        // Actual spend crossed 80% of budget.
+        {
+          notification: {
+            notificationType: 'ACTUAL',
+            comparisonOperator: 'GREATER_THAN',
+            threshold: 80,
+            thresholdType: 'PERCENTAGE',
+          },
+          subscribers: [{ subscriptionType: 'SNS', address: this.alarmTopic.topicArn }],
+        },
+        // Forecast says we will exceed the budget this month.
+        {
+          notification: {
+            notificationType: 'FORECASTED',
+            comparisonOperator: 'GREATER_THAN',
+            threshold: 100,
+            thresholdType: 'PERCENTAGE',
+          },
+          subscribers: [{ subscriptionType: 'SNS', address: this.alarmTopic.topicArn }],
+        },
+      ],
+    });
+
+    // AWS/Billing metrics are only published in us-east-1, so this alarm is
+    // only meaningful when the stack is deployed there. Guarded to avoid
+    // creating an alarm that sits in INSUFFICIENT_DATA forever.
+    if (this.region === 'us-east-1') {
+      const billingAlarm = new cloudwatch.Alarm(this, 'EstimatedChargesAlarm', {
+        alarmName: `${projectName}-estimated-charges-${environment}`,
+        alarmDescription:
+          `Total estimated AWS charges exceeded $${monthlyBudgetUsd}. ` +
+          'Largest fixed cost is the OpenSearch Serverless OCU floor.',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/Billing',
+          metricName: 'EstimatedCharges',
+          dimensionsMap: { Currency: 'USD' },
+          statistic: 'Maximum',
+          period: cdk.Duration.hours(6),
+        }),
+        threshold: monthlyBudgetUsd,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      billingAlarm.addAlarmAction(new cloudwatchActions.SnsAction(this.alarmTopic));
+    }
 
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'DashboardUrl', {

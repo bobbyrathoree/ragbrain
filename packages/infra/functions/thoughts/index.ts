@@ -1,6 +1,7 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { DynamoDBClient, QueryCommand, GetItemCommand, BatchGetItemCommand, UpdateItemCommand, DeleteItemCommand } from '@aws-sdk/client-dynamodb';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 import {
   ThoughtsRequest,
@@ -13,12 +14,66 @@ import {
 
 const dynamodb = new DynamoDBClient({});
 const cloudwatch = new CloudWatchClient({});
+const sqs = new SQSClient({});
 
 const {
   TABLE_NAME,
   PROJECT_NAME,
   ENVIRONMENT,
+  QUEUE_URL,
 } = process.env;
+
+/**
+ * Keep the search index in step with DynamoDB.
+ *
+ * This handler owns DynamoDB but deliberately has no OpenSearch client: index
+ * writes belong to the indexer. Editing or deleting a thought used to touch
+ * DynamoDB only, so deleted note text stayed searchable and citable forever and
+ * edits left Ask quoting stale text. We enqueue the intent instead, which reuses
+ * the indexer's existing retry and DLQ behaviour.
+ *
+ * Failures here are logged, not surfaced: the user's DynamoDB write already
+ * succeeded, and reporting an error would wrongly imply it did not. The gap is
+ * visible via the ThoughtReindexEnqueueFailed metric.
+ *
+ * See docs/AUDIT-2026-08.md finding 5.
+ */
+async function enqueueIndexSync(
+  action: 'reindex' | 'delete',
+  thoughtId: string,
+  user: string,
+  s3Key?: string,
+): Promise<void> {
+  if (!QUEUE_URL) {
+    console.error('QUEUE_URL not configured; search index will drift', { action, thoughtId });
+    return;
+  }
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: QUEUE_URL,
+      MessageBody: JSON.stringify({ type: action, thoughtId, user, s3Key }),
+      MessageAttributes: {
+        type: { DataType: 'String', StringValue: action },
+        user: { DataType: 'String', StringValue: user },
+      },
+    }));
+  } catch (error) {
+    console.error(`Failed to enqueue ${action} for search index:`, error);
+    await cloudwatch.send(new PutMetricDataCommand({
+      Namespace: PROJECT_NAME,
+      MetricData: [{
+        MetricName: 'ThoughtReindexEnqueueFailed',
+        Value: 1,
+        Unit: 'Count',
+        Dimensions: [
+          { Name: 'Environment', Value: ENVIRONMENT || 'dev' },
+          { Name: 'Action', Value: action },
+        ],
+      }],
+    })).catch(() => { /* metric loss must not mask the original error */ });
+  }
+}
 
 interface DynamoThought {
   pk: string;
@@ -283,10 +338,16 @@ async function handleUpdateThought(
       pk: { S: thought.pk },
       sk: { S: thought.sk },
     },
-    UpdateExpression: 'SET #text = :text',
-    ExpressionAttributeNames: { '#text': 'text' },
-    ExpressionAttributeValues: { ':text': { S: body.text.trim() } },
+    UpdateExpression: 'SET #text = :text, #indexingStatus = :indexingStatus',
+    ExpressionAttributeNames: { '#text': 'text', '#indexingStatus': 'indexingStatus' },
+    ExpressionAttributeValues: {
+      ':text': { S: body.text.trim() },
+      ':indexingStatus': { S: 'pending' },
+    },
   }));
+
+  // Re-embed and re-index so Ask/Search/Graph reflect the new text.
+  await enqueueIndexSync('reindex', thoughtId, user, thought.s3Key);
 
   return {
     statusCode: 200,
@@ -326,6 +387,9 @@ async function handleDeleteThought(
       sk: { S: thought.sk },
     },
   }));
+
+  // Remove from the search index too, or the text stays searchable and citable.
+  await enqueueIndexSync('delete', thoughtId, user);
 
   return {
     statusCode: 204,
