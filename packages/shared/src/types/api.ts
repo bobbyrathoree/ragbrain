@@ -48,7 +48,6 @@ export interface Citation {
   id: string;
   createdAt: string;
   preview: string;
-  score: number;
   type?: string;
   tags?: string[];
 }
@@ -59,7 +58,6 @@ export interface ConversationHit {
   title: string;
   preview: string;
   messageCount: number;
-  score: number;
   createdAt: string;
 }
 
@@ -67,7 +65,7 @@ export interface AskResponse {
   answer: string;
   citations: Citation[];
   conversationHits?: ConversationHit[]; // Related past conversations
-  confidence?: number;
+  searchMode?: 'hybrid' | 'bm25-fallback';
   processingTime?: number;
 }
 
@@ -115,6 +113,8 @@ export interface GraphResponse {
     totalThemes: number;
     generatedAt: string;
     algorithm: string;
+    semanticAvailable?: boolean;
+    degradedReason?: string;
   };
 }
 
@@ -146,6 +146,8 @@ export interface GalaxyOverview {
   metadata: {
     totalThoughts: number;
     generatedAt: string;
+    semanticAvailable?: boolean;
+    degradedReason?: string;
   };
 }
 
@@ -172,6 +174,10 @@ export interface ConstellationView {
   themeColor: string;
   thoughts: ConstellationNode[];
   edges: ConstellationEdge[];
+  metadata?: {
+    semanticAvailable: boolean;
+    degradedReason?: string;
+  };
 }
 
 // Error response
@@ -204,7 +210,6 @@ export interface ConversationMessage {
   content: string; // Decrypted for API response
   citations?: Citation[];
   searchedThoughts?: string[];
-  confidence?: number;
   createdAt: string;
 }
 

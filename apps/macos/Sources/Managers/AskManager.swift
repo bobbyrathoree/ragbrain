@@ -82,15 +82,13 @@ struct AskAnswer: Identifiable {
     let id = UUID()
     let text: String
     let citations: [Citation]
-    let confidence: Double
     let processingTime: Int
     let query: String
     let timestamp: Date
 
-    init(text: String, citations: [Citation], confidence: Double, processingTime: Int, query: String) {
+    init(text: String, citations: [Citation], processingTime: Int, query: String) {
         self.text = text
         self.citations = citations
-        self.confidence = confidence
         self.processingTime = processingTime
         self.query = query
         self.timestamp = Date()
@@ -101,7 +99,6 @@ struct Citation: Identifiable, Codable {
     let id: String
     let createdAt: String
     let preview: String
-    let score: Double
     let type: String
     let tags: [String]
 
@@ -149,7 +146,6 @@ class AskAPIClient {
     struct AskResponse: Codable {
         let answer: String
         let citations: [Citation]
-        let confidence: Double
         let processingTime: Int
     }
 
@@ -187,7 +183,6 @@ class AskAPIClient {
             return AskAnswer(
                 text: apiResponse.answer,
                 citations: apiResponse.citations,
-                confidence: apiResponse.confidence,
                 processingTime: apiResponse.processingTime,
                 query: query
             )

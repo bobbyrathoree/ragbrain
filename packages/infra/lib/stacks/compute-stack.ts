@@ -23,10 +23,8 @@ interface ComputeStackProps extends cdk.StackProps {
 
 export class ComputeStack extends cdk.Stack {
   public readonly captureLambda: lambda.Function;
-  public readonly captureLambdaAlias: lambda.Alias;
   public readonly indexerLambda: lambda.Function;
   public readonly askLambda: lambda.Function;
-  public readonly askLambdaAlias: lambda.Alias;
   public readonly thoughtsLambda: lambda.Function;
   public readonly graphLambda: lambda.Function;
   public readonly conversationsLambda: lambda.Function;
@@ -64,6 +62,7 @@ export class ComputeStack extends cdk.Stack {
       resources: [
         // Titan embeddings
         `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v1`,
+        `arn:aws:bedrock:${this.region}::foundation-model/amazon.titan-embed-text-v2:0`,
         // Legacy Claude 3 models (for backwards compatibility)
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-sonnet-*`,
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-haiku-*`,
@@ -149,13 +148,6 @@ export class ComputeStack extends cdk.Stack {
     thoughtsTable.grantWriteData(this.captureLambda);
     indexQueue.grantSendMessages(this.captureLambda);
 
-    // Provisioned concurrency alias for Capture Lambda (reduce cold starts)
-    this.captureLambdaAlias = new lambda.Alias(this, 'CaptureLambdaAlias', {
-      aliasName: 'live',
-      version: this.captureLambda.currentVersion,
-      provisionedConcurrentExecutions: environment === 'prod' ? 2 : 1,
-    });
-
     // Indexer Lambda - processes thoughts and conversations for search
     this.indexerLambda = new lambdaNodejs.NodejsFunction(this, 'IndexerLambda', {
       functionName: `${projectName}-indexer-${environment}`,
@@ -226,13 +218,6 @@ export class ComputeStack extends cdk.Stack {
         ],
       })
     );
-
-    // Provisioned concurrency alias for Ask Lambda (reduce cold starts)
-    this.askLambdaAlias = new lambda.Alias(this, 'AskLambdaAlias', {
-      aliasName: 'live',
-      version: this.askLambda.currentVersion,
-      provisionedConcurrentExecutions: environment === 'prod' ? 3 : 2,
-    });
 
     // Thoughts Lambda - lists and filters thoughts
     this.thoughtsLambda = new lambdaNodejs.NodejsFunction(this, 'ThoughtsLambda', {
@@ -341,7 +326,7 @@ export class ComputeStack extends cdk.Stack {
     thoughtsTable.grantReadData(this.exportLambda);
     encryptionKey.grantDecrypt(this.exportLambda); // For decrypting conversation messages
 
-    // Search Lambda - lightweight BM25 text search (no embeddings, no LLM)
+    // Search Lambda - hybrid retrieval with an explicit BM25 comparison mode
     this.searchLambda = new lambdaNodejs.NodejsFunction(this, 'SearchLambda', {
       functionName: `${projectName}-search-${environment}`,
       entry: path.join(__dirname, '../../functions/search/index.ts'),
@@ -355,7 +340,7 @@ export class ComputeStack extends cdk.Stack {
       bundling: bundlingOptions,
     });
 
-    // Search Lambda only needs OpenSearch access (no Bedrock, no DynamoDB writes)
+    this.searchLambda.addToRolePolicy(bedrockPolicy);
     this.searchLambda.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,

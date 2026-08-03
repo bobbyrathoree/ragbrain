@@ -28,7 +28,6 @@ import {
   hybridSearch,
   scoreAndRank,
   extractCitations,
-  calculateConfidence,
   emitMetrics,
   getAuthUser,
   jsonResponse,
@@ -74,7 +73,6 @@ interface DynamoMessage {
   content: string; // Encrypted
   citations?: Citation[];
   searchedThoughts?: string[];
-  confidence?: number;
   createdAt: number;
   user: string;
 }
@@ -117,7 +115,7 @@ async function generateConversationalAnswer(
   query: string,
   context: SearchHit[],
   history: ConversationMessage[],
-): Promise<{ answer: string; citations: Citation[]; confidence: number }> {
+): Promise<{ answer: string; citations: Citation[] }> {
   const historySection = history.length > 0
     ? `Previous conversation:\n${history.map(m =>
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`
@@ -159,9 +157,8 @@ ${historySection}Guidelines:
     const result = JSON.parse(new TextDecoder().decode(response.body));
     const answer = result.content[0].text.trim();
     const citations = extractCitations(answer, context);
-    const confidence = calculateConfidence(citations);
 
-    return { answer, citations, confidence };
+    return { answer, citations };
   } catch (error) {
     console.error('Answer generation failed:', error);
 
@@ -173,18 +170,15 @@ ${historySection}Guidelines:
           id: top._source.id,
           createdAt: new Date(top._source.created_at_epoch).toISOString(),
           preview: top._source.text.substring(0, 200),
-          score: top._score,
           type: top._source.type,
           tags: top._source.tags,
         }],
-        confidence: 0.5,
       };
     }
 
     return {
       answer: "I couldn't find relevant information in your notes to answer this question.",
       citations: [],
-      confidence: 0.1,
     };
   }
 }
@@ -246,15 +240,15 @@ async function processMessage(
 
   // 3. Search for relevant thoughts
   const embedding = await generateEmbedding(bedrock, content);
-  const searchResults = await hybridSearch(
+  const searchExecution = await hybridSearch(
     opensearch, SEARCH_COLLECTION, content, embedding,
     { user, tags, timeWindow },
-    { size: 50, knnK: 25 },
+    { size: 50, knnK: 25, cloudwatch },
   );
-  const rankedResults = scoreAndRank(searchResults);
+  const rankedResults = scoreAndRank(searchExecution.hits);
 
   // 4. Generate answer with conversation context
-  const { answer, citations, confidence } = await generateConversationalAnswer(content, rankedResults, history);
+  const { answer, citations } = await generateConversationalAnswer(content, rankedResults, history);
 
   // 5. Encrypt and store assistant message
   const assistantMessageId = `msg_${uuidv4()}`;
@@ -264,19 +258,21 @@ async function processMessage(
 
   await dynamodb.send(new PutItemCommand({
     TableName: TABLE_NAME,
-    Item: marshall({
-      pk: `conv#${conversationId}`,
-      sk: `msg#${assistantNow}#${assistantMessageId}`,
-      id: assistantMessageId,
-      conversationId,
-      role: 'assistant',
-      content: encryptedAssistant,
-      citations,
-      searchedThoughts: searchedThoughtIds,
-      confidence,
-      createdAt: assistantNow,
-      user,
-    }),
+    Item: marshall(
+      {
+        pk: `conv#${conversationId}`,
+        sk: `msg#${assistantNow}#${assistantMessageId}`,
+        id: assistantMessageId,
+        conversationId,
+        role: 'assistant',
+        content: encryptedAssistant,
+        citations,
+        searchedThoughts: searchedThoughtIds,
+        createdAt: assistantNow,
+        user,
+      },
+      { removeUndefinedValues: true },
+    ),
   }));
 
   // 6. Update conversation metadata
@@ -327,7 +323,6 @@ async function processMessage(
       content: answer,
       citations,
       searchedThoughts: searchedThoughtIds,
-      confidence,
       createdAt: new Date(assistantNow).toISOString(),
     },
   };
@@ -442,8 +437,6 @@ async function getConversation(event: APIGatewayProxyEventV2, user: string): Pro
     };
     if (msg.citations?.length) message.citations = msg.citations;
     if (msg.searchedThoughts?.length) message.searchedThoughts = msg.searchedThoughts;
-    if (msg.confidence != null) message.confidence = msg.confidence;
-
     messages.push(message);
   }
 
@@ -535,6 +528,7 @@ async function deleteConversation(event: APIGatewayProxyEventV2, user: string): 
     Key: marshall({ pk: `user#${user}`, sk: `conv#${conversationId}` }),
   }));
   if (!existing.Item) return notFoundError('Conversation not found');
+  const existingConversation = unmarshall(existing.Item) as DynamoConversation;
 
   // Batch delete messages
   const msgResult = await dynamodb.send(new QueryCommand({
@@ -563,6 +557,18 @@ async function deleteConversation(event: APIGatewayProxyEventV2, user: string): 
   } catch (error: any) {
     if (error.name === 'ConditionalCheckFailedException') return notFoundError('Conversation not found');
     throw error;
+  }
+
+  if (QUEUE_URL) {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: QUEUE_URL,
+      MessageBody: JSON.stringify({
+        type: 'conversation-delete',
+        conversationId,
+        user,
+        wasIndexed: existingConversation.indexedAt != null,
+      }),
+    }));
   }
 
   return jsonResponse(200, { message: 'Conversation deleted' });

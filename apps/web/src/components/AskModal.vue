@@ -103,15 +103,7 @@ watch(() => props.modelValue, (open) => {
               v-html="formattedAnswer"
             />
 
-            <!-- Confidence -->
-            <div class="flex items-center gap-3 mt-4 text-xs text-text-tertiary">
-              <div class="flex items-center gap-2">
-                <div class="w-16 h-1 bg-bg-tertiary rounded-full overflow-hidden">
-                  <div class="h-full bg-text-primary rounded-full" :style="{ width: `${askResponse.confidence * 100}%` }" />
-                </div>
-                <span>{{ Math.round(askResponse.confidence * 100) }}%</span>
-              </div>
-              <span>·</span>
+            <div class="mt-4 text-xs text-text-tertiary">
               <span>{{ askResponse.processingTime }}ms</span>
             </div>
 
@@ -125,10 +117,8 @@ watch(() => props.modelValue, (open) => {
                   class="p-3 bg-bg-tertiary/50 rounded-lg"
                 >
                   <p class="text-sm text-text-primary line-clamp-2">{{ citation.preview }}</p>
-                  <div class="flex items-center gap-2 mt-2 text-xs text-text-tertiary">
+                  <div v-if="citation.type" class="mt-2 text-xs text-text-tertiary">
                     <span class="uppercase">{{ citation.type }}</span>
-                    <span>·</span>
-                    <span>{{ Math.round(citation.score * 100) }}% match</span>
                   </div>
                 </div>
               </div>

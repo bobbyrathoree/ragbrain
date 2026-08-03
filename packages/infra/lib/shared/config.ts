@@ -7,7 +7,7 @@
 // AI Model configuration
 // Sonnet for high-quality reasoning (ask answers), Haiku for fast processing (tags, themes, summaries)
 export const MODELS = {
-  EMBED: 'amazon.titan-embed-text-v1',
+  EMBED: 'amazon.titan-embed-text-v2:0',
   REASONING: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
   FAST: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
 } as const;
@@ -21,8 +21,6 @@ export const SEARCH_WEIGHTS = {
   recency: 0.15,
   decision: 0.05,
 } as const;
-
-export const MIN_CITATION_SCORE = 0.3;
 
 // Environment helpers
 export function env(key: string): string {

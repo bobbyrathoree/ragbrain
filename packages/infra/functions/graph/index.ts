@@ -20,6 +20,7 @@ import {
   ConstellationNode,
   ConstellationEdge,
 } from '@ragbrain/shared';
+import { MODELS } from '../../lib/shared/config';
 
 const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});
@@ -67,6 +68,14 @@ interface ThoughtWithEmbedding {
   type: string;
   createdAt: number;
   decisionScore: number;
+}
+
+type ThoughtWithoutEmbedding = Omit<ThoughtWithEmbedding, 'embedding'>;
+
+interface ThoughtFetchResult {
+  thoughts: ThoughtWithEmbedding[];
+  fallbackThoughts: ThoughtWithoutEmbedding[];
+  semanticAvailable: boolean;
 }
 
 function truncateText(text: string, maxLen: number): string {
@@ -273,7 +282,7 @@ Generate a theme that captures what connects these thoughts. Respond in JSON for
 
   try {
     const response = await bedrock.send(new InvokeModelCommand({
-      modelId: 'anthropic.claude-3-5-haiku-20241022-v1:0',
+      modelId: MODELS.FAST,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -356,7 +365,7 @@ function compute2DLayout(
 async function fetchThoughtsWithEmbeddings(
   user: string,
   month?: string
-): Promise<ThoughtWithEmbedding[]> {
+): Promise<ThoughtFetchResult> {
   let dateRange: { from: number; to: number } | undefined;
   if (month) {
     const [year, monthNum] = month.split('-').map(Number);
@@ -372,7 +381,10 @@ async function fetchThoughtsWithEmbeddings(
     size: 1000,
     query: {
       bool: {
-        must: [{ term: { user } }],
+        must: [
+          { term: { user } },
+          { term: { docType: 'thought' } },
+        ],
       },
     },
     _source: ['id', 'embedding', 'text', 'tags', 'type', 'created_at_epoch', 'decision_score'],
@@ -395,24 +407,31 @@ async function fetchThoughtsWithEmbeddings(
       body: searchBody,
     });
 
-    return response.body.hits.hits.map((hit: any) => ({
-      id: hit._source.id,
-      embedding: hit._source.embedding,
-      text: hit._source.text,
-      tags: hit._source.tags || [],
-      type: hit._source.type,
-      createdAt: hit._source.created_at_epoch,
-      decisionScore: hit._source.decision_score || 0,
-    }));
+    return {
+      thoughts: response.body.hits.hits
+        .filter((hit: any) => Array.isArray(hit._source.embedding))
+        .map((hit: any) => ({
+          id: hit._source.id,
+          embedding: hit._source.embedding,
+          text: hit._source.text,
+          tags: hit._source.tags || [],
+          type: hit._source.type,
+          createdAt: hit._source.created_at_epoch,
+          decisionScore: hit._source.decision_score || 0,
+        })),
+      fallbackThoughts: [],
+      semanticAvailable: true,
+    };
   } catch (error) {
     console.error('Failed to fetch thoughts from OpenSearch:', error);
 
-    // Fallback to DynamoDB (without embeddings)
+    // Return real nodes from DynamoDB, but never fabricate similarity vectors.
     const scanParams: any = {
       TableName: TABLE_NAME,
-      FilterExpression: 'begins_with(pk, :userKey)',
+      FilterExpression: 'pk = :userKey AND begins_with(sk, :thoughtKey)',
       ExpressionAttributeValues: {
         ':userKey': { S: `user#${user}` },
+        ':thoughtKey': { S: 'ts#' },
       },
       Limit: 500,
     };
@@ -425,22 +444,58 @@ async function fetchThoughtsWithEmbeddings(
 
     const scanResult = await dynamodb.send(new ScanCommand(scanParams));
 
-    return (scanResult.Items || []).map(item => {
-      const thought = unmarshall(item);
-      // Generate random embeddings for visualization (fallback)
-      const embedding = Array(1024).fill(0).map(() => Math.random() - 0.5);
-
-      return {
+    return {
+      thoughts: [],
+      fallbackThoughts: (scanResult.Items || []).map(item => {
+        const thought = unmarshall(item);
+        return {
         id: thought.id,
-        embedding,
         text: thought.text,
         tags: Array.from(thought.tags || []),
         type: thought.type,
         createdAt: thought.createdAt,
         decisionScore: thought.decisionScore || 0,
-      };
-    });
+        };
+      }),
+      semanticAvailable: false,
+    };
   }
+}
+
+function buildGraphWithoutSemanticEdges(
+  thoughts: ThoughtWithoutEmbedding[],
+): GraphResponse {
+  const now = Date.now();
+  const maxAge = 365 * 24 * 60 * 60 * 1000;
+  const count = Math.max(thoughts.length, 1);
+
+  return {
+    themes: [],
+    nodes: thoughts.map((thought, index) => {
+      const angle = (index / count) * 2 * Math.PI;
+      return {
+        id: thought.id,
+        label: truncateText(thought.text, 60),
+        themeId: 'unclustered',
+        x: 200 * Math.cos(angle),
+        y: 200 * Math.sin(angle),
+        tags: thought.tags,
+        recency: Math.max(0, 1 - (now - thought.createdAt) / maxAge),
+        importance: thought.decisionScore,
+        type: thought.type,
+      };
+    }),
+    edges: [],
+    metadata: {
+      totalNodes: thoughts.length,
+      totalEdges: 0,
+      totalThemes: 0,
+      generatedAt: new Date().toISOString(),
+      algorithm: 'unavailable',
+      semanticAvailable: false,
+      degradedReason: 'Semantic embeddings are unavailable',
+    },
+  };
 }
 
 // ============ Edge Building ============
@@ -712,7 +767,28 @@ async function handleLODRequest(
   } catch {}
 
   // Fetch thoughts and cluster
-  const thoughts = await fetchThoughtsWithEmbeddings(user);
+  const fetched = await fetchThoughtsWithEmbeddings(user);
+  if (!fetched.semanticAvailable) {
+    await cloudwatch.send(new PutMetricDataCommand({
+      Namespace: PROJECT_NAME,
+      MetricData: [{
+        MetricName: 'GraphSemanticUnavailable',
+        Value: 1,
+        Unit: 'Count',
+        Dimensions: [{ Name: 'Environment', Value: ENVIRONMENT }],
+      }],
+    })).catch(() => {});
+
+    return {
+      statusCode: 503,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'SemanticEmbeddingsUnavailable',
+        message: 'Graph clustering requires real embeddings',
+      }),
+    };
+  }
+  const thoughts = fetched.thoughts;
   if (thoughts.length === 0) {
     const empty = level === 'overview'
       ? { level: 0, themes: [], affinities: [], metadata: { totalThoughts: 0, generatedAt: new Date().toISOString() } }
@@ -878,7 +954,19 @@ export const handler = async (
         : 0.7,
     };
 
-    const cacheKey = `graph/${user}/${params.month || 'all'}-v2.json`;
+    if (!Number.isFinite(params.minSimilarity) || params.minSimilarity! < 0 || params.minSimilarity! > 1) {
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'ValidationError',
+          message: 'minSimilarity must be between 0 and 1',
+        }),
+      };
+    }
+
+    const similarityKey = params.minSimilarity!.toFixed(3);
+    const cacheKey = `graph/${user}/${params.month || 'all'}-sim-${similarityKey}-v3.json`;
 
     // Check cache
     let lastDataChange = 0;
@@ -930,7 +1018,29 @@ export const handler = async (
     }
 
     // Fetch thoughts with embeddings
-    const thoughts = await fetchThoughtsWithEmbeddings(user, params.month);
+    const fetched = await fetchThoughtsWithEmbeddings(user, params.month);
+    if (!fetched.semanticAvailable) {
+      const fallback = buildGraphWithoutSemanticEdges(fetched.fallbackThoughts);
+      await cloudwatch.send(new PutMetricDataCommand({
+        Namespace: PROJECT_NAME,
+        MetricData: [{
+          MetricName: 'GraphSemanticUnavailable',
+          Value: 1,
+          Unit: 'Count',
+          Dimensions: [{ Name: 'Environment', Value: ENVIRONMENT }],
+        }],
+      })).catch(() => {});
+
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Semantic-Edges': 'unavailable',
+        },
+        body: JSON.stringify(fallback),
+      };
+    }
+    const thoughts = fetched.thoughts;
 
     if (thoughts.length === 0) {
       const emptyResponse: GraphResponse = {

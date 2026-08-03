@@ -221,6 +221,13 @@ export class MonitoringStack extends cdk.Stack {
           statistic: 'Average',
           period: cdk.Duration.minutes(5),
         }),
+        new cloudwatch.Metric({
+          namespace: projectName,
+          metricName: 'HybridSearchFallback',
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5),
+          color: cloudwatch.Color.RED,
+        }),
       ],
       width: 8,
       height: 6,
@@ -360,6 +367,24 @@ export class MonitoringStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     searchHitAlarm.addAlarmAction(new cloudwatchActions.SnsAction(this.alarmTopic));
+
+    const hybridFallbackAlarm = new cloudwatch.Alarm(this, 'HybridSearchFallbackAlarm', {
+      alarmName: `${projectName}-${environment}-hybrid-search-fallback`,
+      alarmDescription: 'Semantic retrieval degraded to BM25-only search',
+      metric: new cloudwatch.Metric({
+        namespace: projectName,
+        metricName: 'HybridSearchFallback',
+        dimensionsMap: {
+          Environment: environment,
+        },
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    hybridFallbackAlarm.addAlarmAction(new cloudwatchActions.SnsAction(this.alarmTopic));
 
     // ── Cost Guardrails ───────────────────────────────────────────
     //

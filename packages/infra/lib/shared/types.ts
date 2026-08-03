@@ -10,11 +10,11 @@ export interface SearchHit {
   _source: {
     id: string;
     text: string;
-    summary: string;
-    tags: string[];
-    type: string;
+    summary?: string;
+    tags?: string[];
+    type?: string;
     created_at_epoch: number;
-    decision_score: number;
+    decision_score?: number;
     embedding?: number[];
     user: string;
     // Conversation-specific fields

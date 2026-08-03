@@ -131,10 +131,6 @@ struct AskSheet: View {
                     Text("Answered in \(answer.processingTime)ms")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-
-                    Text("Confidence: \(Int(answer.confidence * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(confidenceColor(answer.confidence))
                 }
 
                 Spacer()
@@ -166,13 +162,6 @@ struct AskSheet: View {
         }
     }
 
-    private func confidenceColor(_ confidence: Double) -> Color {
-        switch confidence {
-        case 0.8...1.0: return .green
-        case 0.5..<0.8: return .orange
-        default: return .red
-        }
-    }
 }
 
 // MARK: - Answer View
@@ -233,10 +222,6 @@ struct CitationRow: View {
                         }
 
                         Spacer()
-
-                        Text("\(Int(citation.score * 100))% match")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
                     }
 
                     Text(citation.preview)

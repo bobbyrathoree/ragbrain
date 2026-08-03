@@ -52,12 +52,12 @@ export interface Thought {
   indexingStatus?: 'pending' | 'indexed' | 'failed'
 }
 
-// AskResponse with required confidence/processingTime for frontend display
+// Ask response used by the question modal
 export interface AskResponse {
   answer: string
-  confidence: number
   citations: Citation[]
   processingTime: number
+  searchMode?: 'hybrid' | 'bm25-fallback'
 }
 
 // Legacy GraphNode (backward compat with old graph view)
@@ -72,12 +72,15 @@ export interface SearchResult {
   score: number
   highlight?: string
   createdAt: string
+  docType?: 'thought' | 'conversation'
+  title?: string
 }
 
 export interface SearchResponse {
   results: SearchResult[]
   totalCount: number
   processingTime: number
+  searchMode?: 'hybrid' | 'bm25' | 'bm25-fallback'
 }
 
 // Graph data bundle used by GraphView

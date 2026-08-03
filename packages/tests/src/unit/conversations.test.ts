@@ -138,7 +138,7 @@ await test('Read: Get conversation by ID', async () => {
 
   if (status === 200) {
     // Response might have different field name for id or be nested
-    const responseData = data as Record<string, unknown>;
+    const responseData = data as unknown as Record<string, unknown>;
     const hasId = responseData.id !== undefined ||
                   responseData.conversationId !== undefined ||
                   (responseData.conversation as Record<string, unknown>)?.id !== undefined;

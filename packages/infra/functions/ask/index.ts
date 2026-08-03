@@ -16,8 +16,6 @@ import {
   scoreAndRank,
   rewriteQuery,
   extractCitations,
-  calculateConfidence,
-  normalizeScores,
   emitMetrics,
   getAuthUser,
   validationError,
@@ -37,7 +35,7 @@ const SEARCH_COLLECTION = process.env.SEARCH_COLLECTION!;
 async function generateAnswer(
   query: string,
   context: SearchHit[],
-): Promise<{ answer: string; citations: Citation[]; confidence: number }> {
+): Promise<{ answer: string; citations: Citation[] }> {
   const contextSnippets = context.slice(0, 6).map((hit, index) => {
     const date = new Date(hit._source.created_at_epoch).toISOString().split('T')[0];
     const preview = hit.highlight?.text?.[0] || hit._source.summary || hit._source.text.substring(0, 150);
@@ -67,9 +65,8 @@ Keep answers concise (2-3 sentences max) and directly address the question.`;
     const result = JSON.parse(new TextDecoder().decode(response.body));
     const answer = result.content[0].text.trim();
     const citations = extractCitations(answer, context);
-    const confidence = calculateConfidence(citations);
 
-    return { answer, citations, confidence };
+    return { answer, citations };
   } catch (error) {
     console.error('Generation error:', error);
 
@@ -82,18 +79,15 @@ Keep answers concise (2-3 sentences max) and directly address the question.`;
           id: top._source.id,
           createdAt: new Date(top._source.created_at_epoch).toISOString(),
           preview: top._source.text.substring(0, 300),
-          score: top._score,
           type: top._source.type,
           tags: top._source.tags,
         }],
-        confidence: 0.5,
       };
     }
 
     return {
       answer: "I couldn't find relevant information in your notes to answer this question.",
       citations: [],
-      confidence: 0.1,
     };
   }
 }
@@ -129,20 +123,21 @@ export const handler = async (
     const queryEmbedding = await generateEmbedding(bedrock, body.query);
 
     // Perform hybrid search
-    const searchResults = await hybridSearch(
+    const searchExecution = await hybridSearch(
       opensearch, SEARCH_COLLECTION, expandedQuery, queryEmbedding,
       { user, tags: [...(body.tags || []), ...tags], timeWindow: body.timeWindow },
+      { cloudwatch },
     );
 
     // Score and rank
-    const rankedResults = scoreAndRank(searchResults);
+    const rankedResults = scoreAndRank(searchExecution.hits);
 
     // Separate thoughts from conversations
     const thoughtResults = rankedResults.filter(h => h._source.docType !== 'conversation');
     const conversationResults = rankedResults.filter(h => h._source.docType === 'conversation');
 
     // Generate answer with citations
-    const { answer, citations, confidence } = await generateAnswer(
+    const { answer, citations } = await generateAnswer(
       body.query,
       thoughtResults.length > 0 ? thoughtResults : rankedResults,
     );
@@ -157,7 +152,6 @@ export const handler = async (
         title: hit._source.title || 'Untitled Conversation',
         preview: lastExchange || hit._source.summary || text.substring(0, 150),
         messageCount: hit._source.messageCount || 0,
-        score: hit._score,
         createdAt: new Date(hit._source.created_at_epoch).toISOString(),
       };
     });
@@ -167,17 +161,16 @@ export const handler = async (
     // Emit metrics
     await emitMetrics(cloudwatch, [
       { name: 'AskLatency', value: processingTime, unit: 'Milliseconds' },
-      { name: 'SearchHitCount', value: searchResults.length },
+      { name: 'SearchHitCount', value: searchExecution.hits.length },
       { name: 'CitationCount', value: citations.length },
-      { name: 'AnswerConfidence', value: confidence, unit: 'None' },
       { name: 'AbstainRate', value: citations.length === 0 ? 1 : 0, unit: 'None' },
     ]);
 
     const response: AskResponse = {
       answer,
-      citations: normalizeScores(citations.slice(0, body.limit || 5)),
-      conversationHits: conversationHits.length > 0 ? normalizeScores(conversationHits) : undefined,
-      confidence,
+      citations: citations.slice(0, body.limit || 5),
+      conversationHits: conversationHits.length > 0 ? conversationHits : undefined,
+      searchMode: searchExecution.mode,
       processingTime,
     };
 

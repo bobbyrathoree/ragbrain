@@ -1,7 +1,13 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
+  bm25Search,
+  createBedrockClient,
+  createCloudWatchClient,
   createOpenSearchClient,
+  generateEmbedding,
   getAuthUser,
+  hybridSearch,
+  rewriteQuery,
   validationError,
   internalError,
   jsonResponse,
@@ -10,6 +16,8 @@ import { sanitizeHighlightSnippet } from '../../lib/shared/sanitization';
 import type { SearchHit } from '../../lib/shared';
 
 const opensearch = createOpenSearchClient();
+const bedrock = createBedrockClient();
+const cloudwatch = createCloudWatchClient();
 const SEARCH_COLLECTION = process.env.SEARCH_COLLECTION!;
 
 export const handler = async (
@@ -27,60 +35,45 @@ export const handler = async (
 
     if (!query?.trim()) return validationError('Query parameter "q" is required');
 
-    const limit = Math.min(parseInt(params.limit || '20', 10), 100);
+    const limit = Math.min(Math.max(parseInt(params.limit || '20', 10), 1), 100);
+    const requestedMode = params.mode === 'bm25' ? 'bm25' : 'hybrid';
+    const filters = {
+      user,
+      tags: params.tag ? params.tag.split(',') : undefined,
+      types: params.type ? [params.type] : undefined,
+      docTypes: params.scope === 'all'
+        ? undefined
+        : ['thought' as const],
+      fromEpoch: params.from ? new Date(params.from).getTime() : undefined,
+    };
 
-    // Build filters
-    const must: any[] = [
-      { term: { user } },
-      // Only search thoughts, not conversations
-      {
-        bool: {
-          should: [
-            { term: { docType: 'thought' } },
-            { bool: { must_not: { exists: { field: 'docType' } } } },
-          ],
-        },
-      },
-    ];
+    let hits: SearchHit[];
+    let searchMode: 'hybrid' | 'bm25' | 'bm25-fallback';
 
-    if (params.type) must.push({ term: { type: params.type } });
-    if (params.tag) must.push({ terms: { tags: params.tag.split(',') } });
-    if (params.from) must.push({ range: { created_at_epoch: { gte: new Date(params.from).getTime() } } });
-
-    // BM25 text search — no embeddings, no LLM
-    const response = await opensearch.search({
-      index: `${SEARCH_COLLECTION}-thoughts`,
-      body: {
-        size: limit,
-        query: {
-          bool: {
-            must: [
-              { multi_match: { query: query.trim(), fields: ['text^2', 'summary^1.5', 'tags'], type: 'best_fields', fuzziness: 'AUTO' } },
-              ...must,
-            ],
-          },
-        },
-        highlight: {
-          fields: {
-            text: { fragment_size: 150, number_of_fragments: 2 },
-            summary: { fragment_size: 150, number_of_fragments: 1 },
-          },
-          pre_tags: ['<mark>'],
-          post_tags: ['</mark>'],
-        },
-        sort: [{ _score: { order: 'desc' } }, { created_at_epoch: { order: 'desc' } }],
-      },
-    });
-
-    const hits = (response.body.hits.hits || []) as SearchHit[];
-    const totalCount = typeof response.body.hits.total === 'object'
-      ? response.body.hits.total.value
-      : response.body.hits.total || 0;
+    if (requestedMode === 'bm25') {
+      hits = await bm25Search(opensearch, SEARCH_COLLECTION, query.trim(), filters, limit);
+      searchMode = 'bm25';
+    } else {
+      const embedding = await generateEmbedding(bedrock, query);
+      const { expandedQuery } = rewriteQuery(query);
+      const execution = await hybridSearch(
+        opensearch,
+        SEARCH_COLLECTION,
+        expandedQuery,
+        embedding,
+        filters,
+        { size: limit, knnK: Math.max(limit, 50), cloudwatch },
+      );
+      hits = execution.hits;
+      searchMode = execution.mode;
+    }
 
     const results = hits.map(hit => ({
       id: hit._source.id,
       text: hit._source.text,
-      type: hit._source.type,
+      title: hit._source.title,
+      docType: hit._source.docType || 'thought',
+      type: hit._source.type || hit._source.docType || 'thought',
       tags: hit._source.tags || [],
       score: hit._score,
       highlight: sanitizeHighlightSnippet(
@@ -90,7 +83,16 @@ export const handler = async (
     }));
 
     const processingTime = Date.now() - startTime;
-    return jsonResponse(200, { results, totalCount, processingTime }, { 'X-Processing-Time': processingTime.toString() });
+    return jsonResponse(
+      200,
+      {
+        results,
+        totalCount: results.length,
+        searchMode,
+        processingTime,
+      },
+      { 'X-Processing-Time': processingTime.toString() },
+    );
   } catch (error) {
     console.error('Search error:', error);
     return internalError('Search failed', event.requestContext.requestId);

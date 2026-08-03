@@ -11,6 +11,11 @@ import { Client } from '@opensearch-project/opensearch';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
+import { EMBED_DIMENSIONS, EMBED_MAX_CHARS, MODELS } from '../../lib/shared/config';
+import {
+  assertEmbeddingDimensions,
+  ensureSearchIndex,
+} from '../../lib/shared/search-index';
 
 const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});
@@ -38,6 +43,22 @@ const opensearchClient = new Client({
   }),
   node: SEARCH_ENDPOINT,
 });
+const searchIndexName = `${SEARCH_COLLECTION}-thoughts`;
+let searchIndexReady: Promise<void> | undefined;
+
+async function ensureIndex(): Promise<void> {
+  if (!searchIndexReady) {
+    searchIndexReady = ensureSearchIndex(
+      opensearchClient,
+      searchIndexName,
+      EMBED_DIMENSIONS,
+    ).catch(error => {
+      searchIndexReady = undefined;
+      throw error;
+    });
+  }
+  return searchIndexReady;
+}
 
 interface ThoughtIndexMessage {
   type?: 'thought';
@@ -55,6 +76,13 @@ interface ConversationIndexMessage {
   assistantMessageId?: string;
 }
 
+interface ConversationDeleteMessage {
+  type: 'conversation-delete';
+  conversationId: string;
+  user: string;
+  wasIndexed: boolean;
+}
+
 /** Emitted by the thoughts handler when a note is edited or deleted. */
 interface ThoughtMutationMessage {
   type: 'reindex' | 'delete';
@@ -66,6 +94,7 @@ interface ThoughtMutationMessage {
 type IndexMessage =
   | ThoughtIndexMessage
   | ConversationIndexMessage
+  | ConversationDeleteMessage
   | ThoughtMutationMessage;
 
 // DynamoDB types for conversations
@@ -78,6 +107,7 @@ interface DynamoConversation {
   updatedAt: number;
   messageCount: number;
   status: string;
+  indexedAt?: number;
 }
 
 interface DynamoMessage {
@@ -89,7 +119,6 @@ interface DynamoMessage {
   content: string; // Encrypted
   citations?: any[];
   searchedThoughts?: string[];
-  confidence?: number;
   createdAt: number;
   user: string;
 }
@@ -135,11 +164,13 @@ interface ThoughtDocument {
 
 async function generateEmbedding(text: string): Promise<number[]> {
   const input = {
-    modelId: 'amazon.titan-embed-text-v1',
+    modelId: MODELS.EMBED,
     contentType: 'application/json',
     accept: 'application/json',
     body: JSON.stringify({
-      inputText: text.substring(0, 8192), // Titan limit
+      inputText: text.substring(0, EMBED_MAX_CHARS),
+      dimensions: EMBED_DIMENSIONS,
+      normalize: true,
     }),
   };
   
@@ -147,6 +178,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
   const response = await bedrock.send(command);
   
   const result = JSON.parse(new TextDecoder().decode(response.body));
+  assertEmbeddingDimensions(result.embedding, EMBED_DIMENSIONS);
   return result.embedding;
 }
 
@@ -157,7 +189,7 @@ async function generateSummary(text: string): Promise<string> {
   }
   
   const input = {
-    modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    modelId: MODELS.FAST,
     contentType: 'application/json',
     accept: 'application/json',
     body: JSON.stringify({
@@ -227,7 +259,7 @@ Example response:
 
   try {
     const input = {
-      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      modelId: MODELS.FAST,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -300,7 +332,7 @@ async function findRelatedThoughts(thoughtId: string, embedding: number[], user:
   try {
     // Query OpenSearch for k-nearest neighbors
     const results = await opensearchClient.search({
-      index: `${SEARCH_COLLECTION}-thoughts`,
+      index: searchIndexName,
       body: {
         size: 6, // Get 6 to exclude self
         query: {
@@ -338,7 +370,7 @@ async function findRelatedThoughts(thoughtId: string, embedding: number[], user:
 }
 
 /**
- * Remove a thought from the search index.
+ * Remove logical documents from the search index.
  *
  * OpenSearch Serverless does NOT support _delete_by_query — it returns 404 for
  * that endpoint (verified against the deployed collection). So we search for the
@@ -346,41 +378,42 @@ async function findRelatedThoughts(thoughtId: string, embedding: number[], user:
  * which Serverless does support.
  *
  * The search is scoped by `user` so one user can never delete another's
- * document. Historic documents were indexed without an explicit _id, so there
- * may be more than one copy; deleting all matches also cleans up duplicates
- * left by earlier re-indexing. New documents set _id explicitly (see
- * processThought), making this a single-hit lookup going forward.
+ * document. Serverless assigns the physical _id, so re-indexing must delete all
+ * documents carrying the same logical id before writing the replacement.
  *
  * See docs/AUDIT-2026-08.md finding 5.
  */
-async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<void> {
-  // No explicit index mapping is created for this index, so dynamic mapping
-  // makes `id` analyzed text with a `.keyword` subfield. A term query on the
-  // analyzed field never matches, because ids like
-  // "t_c75f2207-fd05-42f6-884d-86b1a854ad92" are tokenised on _ and -; that
-  // silently turned every delete into a no-op. Query the .keyword subfield for
-  // exact matching, and re-verify _source before deleting so we can never
-  // delete another user's document.
+async function deleteDocumentsFromIndex(
+  logicalId: string,
+  user: string,
+  options: {
+    docType?: 'thought' | 'conversation';
+    requireExisting: boolean;
+  },
+): Promise<number> {
   // OpenSearch Serverless has a visibility lag (~10s observed) between indexing
   // a document and it becoming searchable. A delete issued shortly after capture
   // would otherwise find nothing and leave the document orphaned in the index
   // forever. Retry with backoff so the delete waits for the document to appear.
-  const attemptDelays = [0, 5_000, 10_000, 15_000, 20_000];
+  const attemptDelays = options.requireExisting
+    ? [0, 5_000, 10_000, 15_000, 20_000]
+    : [0];
   let hits: any[] = [];
 
   for (const delay of attemptDelays) {
     if (delay) await new Promise(resolve => setTimeout(resolve, delay));
 
     const found = await opensearchClient.search({
-      index: `${SEARCH_COLLECTION}-thoughts`,
+      index: searchIndexName,
       body: {
         size: 50,
         _source: ['id', 'user'],
         query: {
           bool: {
             must: [
-              { term: { 'id.keyword': thoughtId } },
-              { term: { 'user.keyword': user } },
+              { term: { id: logicalId } },
+              { term: { user } },
+              ...(options.docType ? [{ term: { docType: options.docType } }] : []),
             ],
           },
         },
@@ -388,17 +421,22 @@ async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<
     });
 
     hits = (found.body.hits.hits || [])
-      .filter((h: any) => h._source?.id === thoughtId && h._source?.user === user);
+      .filter((h: any) =>
+        h._source?.id === logicalId
+        && h._source?.user === user
+        && (!options.docType || h._source?.docType === options.docType)
+      );
 
     if (hits.length > 0) break;
   }
 
-  if (hits.length === 0) {
+  if (hits.length === 0 && options.requireExisting) {
     // Either the document was never indexed, or it is still invisible. Throwing
     // sends the message back to SQS for retry and ultimately to the DLQ, rather
     // than silently declaring success and orphaning the document.
     throw new Error(
-      `Thought ${thoughtId} not found in index after ${attemptDelays.length} attempts; retrying via SQS`,
+      `${options.docType || 'document'} ${logicalId} not found in index after ` +
+      `${attemptDelays.length} attempts; retrying via SQS`,
     );
   }
 
@@ -408,7 +446,7 @@ async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<
   for (const docId of docIds) {
     try {
       await opensearchClient.delete({
-        index: `${SEARCH_COLLECTION}-thoughts`,
+        index: searchIndexName,
         id: docId,
       });
       deleted++;
@@ -418,7 +456,7 @@ async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<
     }
   }
 
-  console.log(`Deleted ${deleted}/${docIds.length} document(s) from index for thought ${thoughtId}`);
+  console.log(`Deleted ${deleted}/${docIds.length} document(s) from index for ${logicalId}`);
 
   await cloudwatch.send(new PutMetricDataCommand({
     Namespace: PROJECT_NAME,
@@ -429,10 +467,19 @@ async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<
       Dimensions: [{ Name: 'Environment', Value: ENVIRONMENT || 'dev' }],
     }],
   })).catch(err => console.error('Failed to emit delete metric:', err));
+
+  return deleted;
+}
+
+async function deleteThoughtFromIndex(thoughtId: string, user: string): Promise<void> {
+  await deleteDocumentsFromIndex(thoughtId, user, {
+    requireExisting: true,
+  });
 }
 
 async function processThought(message: ThoughtIndexMessage): Promise<void> {
   const startTime = Date.now();
+  await ensureIndex();
 
   // Fetch thought from S3
   const s3Response = await s3.send(new GetObjectCommand({
@@ -457,6 +504,7 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
   // Index to OpenSearch
   const searchDocument = {
     id: thoughtData.id,
+    docType: 'thought',
     text: thoughtData.text,
     summary,
     tags: allTags,
@@ -476,7 +524,7 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
   // engine assigns one. The thought id lives in the document body and deletes
   // resolve the real _id via search. Do not add `id:` here.
   await opensearchClient.index({
-    index: `${SEARCH_COLLECTION}-thoughts`,
+    index: searchIndexName,
     body: searchDocument,
     refresh: false,
   });
@@ -568,6 +616,7 @@ async function processThought(message: ThoughtIndexMessage): Promise<void> {
 async function processConversation(message: ConversationIndexMessage): Promise<void> {
   const startTime = Date.now();
   const { conversationId, user } = message;
+  await ensureIndex();
 
   // Fetch conversation metadata
   const convResult = await dynamodb.send(new GetItemCommand({
@@ -670,9 +719,13 @@ async function processConversation(message: ConversationIndexMessage): Promise<v
     user,
   };
 
+  await deleteDocumentsFromIndex(conversationId, user, {
+    docType: 'conversation',
+    requireExisting: conversation.indexedAt != null,
+  });
+
   await opensearchClient.index({
-    index: `${SEARCH_COLLECTION}-thoughts`, // Same index, distinguished by docType
-    id: conversationId, // Use conversation ID to enable upsert
+    index: searchIndexName, // Same index, distinguished by docType
     body: searchDocument,
     refresh: false,
   });
@@ -743,7 +796,7 @@ async function generateConversationSummary(
 
   try {
     const input = {
-      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      modelId: MODELS.FAST,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -782,12 +835,18 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
         console.log(`Processing conversation: ${message.conversationId}`);
         await processConversation(message);
         console.log(`Successfully indexed conversation: ${message.conversationId}`);
+      } else if (message.type === 'conversation-delete') {
+        console.log(`Deleting conversation from index: ${message.conversationId}`);
+        await deleteDocumentsFromIndex(message.conversationId, message.user, {
+          docType: 'conversation',
+          requireExisting: message.wasIndexed,
+        });
       } else if (message.type === 'delete') {
         console.log(`Deleting thought from index: ${message.thoughtId}`);
         await deleteThoughtFromIndex(message.thoughtId, message.user);
       } else if (message.type === 'reindex') {
-        // processThought indexes with _id = thought id, so this upserts in place.
-        // Any duplicate left by pre-_id indexing is cleared first.
+        // Serverless assigns _id values, so clear every logical-id match before
+        // writing the replacement.
         console.log(`Re-indexing thought: ${message.thoughtId}`);
         await deleteThoughtFromIndex(message.thoughtId, message.user);
         if (message.s3Key) {

@@ -204,14 +204,8 @@ onMounted(() => {
                 v-html="renderMarkdown(msg.content)"
               />
 
-              <!-- Confidence + Citations toggle -->
+              <!-- Citations toggle -->
               <div v-if="msg.citations?.length" class="flex items-center gap-3 text-[11px] text-text-tertiary">
-                <div v-if="msg.confidence" class="flex items-center gap-1.5">
-                  <div class="w-10 h-1 bg-bg-tertiary rounded-full overflow-hidden">
-                    <div class="h-full bg-text-primary rounded-full" :style="{ width: `${msg.confidence * 100}%` }" />
-                  </div>
-                  <span>{{ Math.round(msg.confidence * 100) }}%</span>
-                </div>
                 <button
                   @click="toggleCitations(msg.id)"
                   class="text-text-tertiary hover:text-text-secondary transition-colors"
@@ -228,10 +222,8 @@ onMounted(() => {
                   class="p-2.5 bg-bg-tertiary/50 rounded-lg"
                 >
                   <p class="text-xs text-text-primary line-clamp-2">{{ citation.preview }}</p>
-                  <div class="flex items-center gap-2 mt-1 text-[10px] text-text-tertiary">
+                  <div v-if="citation.type" class="mt-1 text-[10px] text-text-tertiary">
                     <span class="uppercase">{{ citation.type }}</span>
-                    <span>·</span>
-                    <span>{{ Math.round(citation.score * 100) }}%</span>
                   </div>
                 </div>
               </div>

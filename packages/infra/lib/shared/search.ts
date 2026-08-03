@@ -12,8 +12,12 @@
 import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { Client } from '@opensearch-project/opensearch';
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import type { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { Citation, calculateRecencyScore, parseTimeWindow } from '@ragbrain/shared';
-import { MODELS, EMBED_MAX_CHARS, SEARCH_WEIGHTS, MIN_CITATION_SCORE } from './config';
+import { MODELS, EMBED_DIMENSIONS, EMBED_MAX_CHARS, SEARCH_WEIGHTS } from './config';
+import { emitMetrics } from './metrics';
+import { reciprocalRankFusion } from './search-core';
+import { assertEmbeddingDimensions } from './search-index';
 import type { SearchHit } from './types';
 
 // ── Embeddings ──────────────────────────────────────────────────
@@ -28,10 +32,13 @@ export async function generateEmbedding(
     accept: 'application/json',
     body: JSON.stringify({
       inputText: text.substring(0, EMBED_MAX_CHARS),
+      dimensions: EMBED_DIMENSIONS,
+      normalize: true,
     }),
   }));
 
   const result = JSON.parse(new TextDecoder().decode(response.body));
+  assertEmbeddingDimensions(result.embedding, EMBED_DIMENSIONS);
   return result.embedding;
 }
 
@@ -102,6 +109,49 @@ export interface SearchFilters {
   user: string;
   tags?: string[];
   timeWindow?: string;
+  types?: string[];
+  docTypes?: Array<'thought' | 'conversation'>;
+  fromEpoch?: number;
+}
+
+export type SearchMode = 'hybrid' | 'bm25-fallback';
+
+export interface HybridSearchResult {
+  hits: SearchHit[];
+  mode: SearchMode;
+}
+
+interface SearchOptions {
+  size?: number;
+  knnK?: number;
+  cloudwatch?: CloudWatchClient;
+}
+
+function buildFilterClauses(filters: SearchFilters): any[] {
+  const clauses: any[] = [{ term: { user: filters.user } }];
+
+  if (filters.tags?.length) {
+    clauses.push({ terms: { tags: filters.tags } });
+  }
+
+  if (filters.types?.length) {
+    clauses.push({ terms: { type: filters.types } });
+  }
+
+  if (filters.docTypes?.length) {
+    clauses.push({ terms: { docType: filters.docTypes } });
+  }
+
+  if (filters.timeWindow) {
+    const fromDate = parseTimeWindow(filters.timeWindow);
+    clauses.push({ range: { created_at_epoch: { gte: fromDate.getTime() } } });
+  }
+
+  if (filters.fromEpoch) {
+    clauses.push({ range: { created_at_epoch: { gte: filters.fromEpoch } } });
+  }
+
+  return clauses;
 }
 
 export async function hybridSearch(
@@ -110,82 +160,102 @@ export async function hybridSearch(
   query: string,
   embedding: number[],
   filters: SearchFilters,
-  options: { size?: number; knnK?: number } = {},
-): Promise<SearchHit[]> {
-  const { size = 100, knnK = 50 } = options;
-  const must: any[] = [{ term: { user: filters.user } }];
+  options: SearchOptions = {},
+): Promise<HybridSearchResult> {
+  const { size = 100, knnK = 50, cloudwatch } = options;
+  const filter = buildFilterClauses(filters);
+  const candidateSize = Math.max(size, knnK);
 
-  if (filters.tags?.length) {
-    must.push({ terms: { tags: filters.tags } });
-  }
-
-  if (filters.timeWindow) {
-    const fromDate = parseTimeWindow(filters.timeWindow);
-    must.push({ range: { created_at_epoch: { gte: fromDate.getTime() } } });
-  }
-
-  const searchBody = {
-    size,
-    query: {
-      hybrid: {
-        queries: [
-          {
-            multi_match: {
-              query,
-              fields: ['text^2', 'summary^1.5', 'tags'],
-              type: 'best_fields',
-              fuzziness: 'AUTO',
-            },
-          },
-          {
+  const lexicalPromise = bm25Search(
+    client,
+    collection,
+    query,
+    filters,
+    candidateSize,
+  );
+  const semanticPromise = client.search({
+    index: `${collection}-thoughts`,
+    body: {
+      size: knnK,
+      query: {
+        bool: {
+          must: [{
             knn: {
-              embedding: { vector: embedding, k: knnK },
+              embedding: {
+                vector: embedding,
+                k: knnK,
+              },
             },
-          },
-        ],
+          }],
+          filter,
+        },
       },
     },
-    filter: { bool: { must } },
-    highlight: {
-      fields: {
-        text: { fragment_size: 150, number_of_fragments: 2 },
-        summary: {},
-      },
-    },
-  };
+  });
 
-  try {
-    const response = await client.search({
-      index: `${collection}-thoughts`,
-      body: searchBody,
-    });
-    return response.body.hits.hits as SearchHit[];
-  } catch (error) {
-    console.error('Hybrid search failed, falling back to BM25:', error);
-    return bm25Fallback(client, collection, query, must, Math.min(size, 50));
+  const [lexical, semantic] = await Promise.allSettled([
+    lexicalPromise,
+    semanticPromise,
+  ]);
+
+  if (lexical.status === 'rejected') {
+    throw lexical.reason;
   }
+
+  if (semantic.status === 'rejected') {
+    console.error('Hybrid search failed, falling back to BM25:', semantic.reason);
+    if (cloudwatch) {
+      await emitMetrics(cloudwatch, [{
+        name: 'HybridSearchFallback',
+        value: 1,
+      }]);
+    }
+    return {
+      hits: lexical.value.slice(0, Math.min(size, 50)),
+      mode: 'bm25-fallback',
+    };
+  }
+
+  const semanticHits = semantic.value.body.hits.hits as SearchHit[];
+  return {
+    hits: reciprocalRankFusion(lexical.value, semanticHits).slice(0, size),
+    mode: 'hybrid',
+  };
 }
 
-async function bm25Fallback(
+export async function bm25Search(
   client: Client,
   collection: string,
   query: string,
-  must: any[],
+  filters: SearchFilters,
   size: number,
 ): Promise<SearchHit[]> {
+  const filter = buildFilterClauses(filters);
   const response = await client.search({
     index: `${collection}-thoughts`,
     body: {
       size,
       query: {
         bool: {
-          must: [
-            { multi_match: { query, fields: ['text', 'summary', 'tags'] } },
-            ...must,
-          ],
+          must: [{
+            multi_match: {
+              query,
+              fields: ['text^2', 'summary^1.5', 'tags', 'title'],
+              type: 'best_fields',
+              fuzziness: 'AUTO',
+            },
+          }],
+          filter,
         },
       },
-      highlight: { fields: { text: { fragment_size: 150 } } },
+      highlight: {
+        fields: {
+          text: { fragment_size: 150, number_of_fragments: 2 },
+          summary: { fragment_size: 150, number_of_fragments: 1 },
+        },
+        pre_tags: ['<mark>'],
+        post_tags: ['</mark>'],
+      },
     },
   });
   return response.body.hits.hits as SearchHit[];
@@ -228,39 +298,15 @@ export function extractCitations(
   for (const index of used) {
     if (index < context.length) {
       const hit = context[index];
-      if (hit._score >= MIN_CITATION_SCORE) {
-        citations.push({
-          id: hit._source.id,
-          createdAt: new Date(hit._source.created_at_epoch).toISOString(),
-          preview: hit._source.text.substring(0, 300),
-          score: hit._score,
-          type: hit._source.type,
-          tags: hit._source.tags,
-        });
-      }
+      citations.push({
+        id: hit._source.id,
+        createdAt: new Date(hit._source.created_at_epoch).toISOString(),
+        preview: hit._source.text.substring(0, 300),
+        ...(hit._source.type ? { type: hit._source.type } : {}),
+        ...(hit._source.tags?.length ? { tags: hit._source.tags } : {}),
+      });
     }
   }
 
   return citations;
-}
-
-export function calculateConfidence(citations: Citation[]): number {
-  if (citations.length === 0) return 0.3;
-  return Math.min(0.95, citations.reduce((sum, c) => sum + c.score, 0) / citations.length);
-}
-
-// ── Score Normalization ─────────────────────────────────────────
-
-export function normalizeScores<T extends { score: number }>(items: T[]): T[] {
-  if (items.length === 0) return items;
-
-  const scores = items.map(i => i.score);
-  const min = Math.min(...scores);
-  const max = Math.max(...scores);
-  const range = max - min || 1;
-
-  return items.map(item => ({
-    ...item,
-    score: Number(((item.score - min) / range).toFixed(3)),
-  }));
 }
