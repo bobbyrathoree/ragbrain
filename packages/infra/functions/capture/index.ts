@@ -102,8 +102,10 @@ export const handler = async (
         createdAtIso: { S: createdAt },
         decisionScore: { N: decisionScore.toString() },
         s3Key: { S: s3Key },
-        gsi1pk: { S: `type#${thoughtType}` },
-        gsi1sk: { S: `ts#${createdAtEpoch}` },
+        // No gsi1pk/gsi1sk: gsi1 was keyed on `type#<type>` with no user
+        // component, so it leaked every user's notes across the tenant boundary.
+        // Both it and gsi2 are gone; `type` is filtered within the caller's own
+        // partition instead. See docs/AUDIT-2026-08.md finding 11.
         // No ttl attribute — notes must not expire. See finding 3.
         indexingStatus: { S: 'pending' },
       },

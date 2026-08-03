@@ -22,6 +22,7 @@
     "test:security:encryption": "tsx src/security/encryption.test.ts",
     "test:security:rate-limit": "tsx src/security/rate-limiting.test.ts",
     "test:security:pii": "tsx src/security/pii-exposure.test.ts",
+    "test:security:tenant": "tsx src/security/tenant-isolation.test.ts",
     "test:readme:features": "tsx src/readme-claims/features.test.ts",
     "test:readme:perf": "tsx src/readme-claims/performance-claims.test.ts",
     "test:readme:sec": "tsx src/readme-claims/security-claims.test.ts",

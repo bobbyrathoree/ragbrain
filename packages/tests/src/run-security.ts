@@ -36,6 +36,7 @@ await runSuite('Injection', './security/injection.test.js');
 await runSuite('Encryption', './security/encryption.test.js');
 await runSuite('Rate Limiting', './security/rate-limiting.test.js');
 await runSuite('PII Exposure', './security/pii-exposure.test.js');
+await runSuite('Tenant Isolation', './security/tenant-isolation.test.js');
 
 const totalTime = Date.now() - startTime;
 let totalPassed = 0;

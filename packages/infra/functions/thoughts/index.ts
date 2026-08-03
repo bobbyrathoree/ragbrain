@@ -113,55 +113,55 @@ function buildQueryParams(
     ScanIndexForward: false, // Newest first
   };
   
-  // Filter by type using GSI
-  if (params.type) {
-    queryParams.IndexName = 'gsi1';
-    queryParams.KeyConditionExpression = 'gsi1pk = :typeKey';
-    queryParams.ExpressionAttributeValues = {
-      ':typeKey': { S: `type#${params.type}` },
-    };
-    
-    // Add date range if specified
-    if (params.from || params.to) {
-      const fromEpoch = params.from ? new Date(params.from).getTime() : 0;
-      const toEpoch = params.to ? new Date(params.to).getTime() : Date.now();
-      
-      queryParams.KeyConditionExpression += ' AND gsi1sk BETWEEN :from AND :to';
-      queryParams.ExpressionAttributeValues[':from'] = { S: `ts#${fromEpoch}` };
-      queryParams.ExpressionAttributeValues[':to'] = { S: `ts#${toEpoch}` };
-    }
-  } else {
-    // Default query by user - only get thoughts (sk BEGINS_WITH ts#), not conversations
-    queryParams.KeyConditionExpression = 'pk = :userKey AND begins_with(sk, :skPrefix)';
-    queryParams.ExpressionAttributeValues = {
-      ':userKey': { S: `user#${user}` },
-      ':skPrefix': { S: 'ts#' },
-    };
+  // Every read is scoped to the caller's own partition. `type` was previously
+  // served by gsi1, whose partition key is `type#<type>` with no user component
+  // and ProjectionType.ALL — so `GET /thoughts?type=note` returned every user's
+  // full note text to any authenticated caller. The `user` argument was accepted
+  // and then ignored on that branch. Reproduced live before fixing.
+  //
+  // Type is a filter, not a partition: the caller's own notes are already a
+  // small set, so filtering after the key condition is correct and cheap. Never
+  // route a read through an index that is not partitioned by user.
+  // See docs/AUDIT-2026-08.md finding 11.
+  const filters: string[] = [];
 
-    // Add date range if specified
-    if (params.from || params.to) {
-      const fromEpoch = params.from ? new Date(params.from).getTime() : 0;
-      const toEpoch = params.to ? new Date(params.to).getTime() : Date.now();
+  queryParams.KeyConditionExpression = 'pk = :userKey AND begins_with(sk, :skPrefix)';
+  queryParams.ExpressionAttributeValues = {
+    ':userKey': { S: `user#${user}` },
+    ':skPrefix': { S: 'ts#' },
+  };
 
-      // For date range queries, use BETWEEN which works with the ts# prefix
-      queryParams.KeyConditionExpression = 'pk = :userKey AND sk BETWEEN :from AND :to';
-      queryParams.ExpressionAttributeValues = {
-        ':userKey': { S: `user#${user}` },
-        ':from': { S: `ts#${fromEpoch}#` },
-        ':to': { S: `ts#${toEpoch}~` },
-      };
-    }
+  // Add date range if specified
+  if (params.from || params.to) {
+    const fromEpoch = params.from ? new Date(params.from).getTime() : 0;
+    const toEpoch = params.to ? new Date(params.to).getTime() : Date.now();
+
+    // For date range queries, use BETWEEN which works with the ts# prefix
+    queryParams.KeyConditionExpression = 'pk = :userKey AND sk BETWEEN :from AND :to';
+    queryParams.ExpressionAttributeValues[':from'] = { S: `ts#${fromEpoch}#` };
+    queryParams.ExpressionAttributeValues[':to'] = { S: `ts#${toEpoch}~` };
+    delete queryParams.ExpressionAttributeValues[':skPrefix'];
   }
-  
+
+  if (params.type) {
+    filters.push('#type = :type');
+    queryParams.ExpressionAttributeNames = {
+      ...queryParams.ExpressionAttributeNames,
+      '#type': 'type',
+    };
+    queryParams.ExpressionAttributeValues[':type'] = { S: params.type };
+  }
+
   // Add tag filter
   if (params.tag) {
-    queryParams.FilterExpression = 'contains(tags, :tag)';
-    queryParams.ExpressionAttributeValues = {
-      ...queryParams.ExpressionAttributeValues,
-      ':tag': { S: params.tag },
-    };
+    filters.push('contains(tags, :tag)');
+    queryParams.ExpressionAttributeValues[':tag'] = { S: params.tag };
   }
-  
+
+  if (filters.length > 0) {
+    queryParams.FilterExpression = filters.join(' AND ');
+  }
+
   // Handle pagination cursor
   if (params.cursor) {
     try {
@@ -460,21 +460,51 @@ export const handler = async (
     
     // Build and execute query
     const queryParams = buildQueryParams(user, params);
-    const queryResult = await dynamodb.send(new QueryCommand(queryParams));
-    
+
+    // DynamoDB applies Limit BEFORE FilterExpression, so a type/tag filter can
+    // return far fewer items than requested — or none at all while more matches
+    // exist further down the partition. Since type is now a filter rather than a
+    // partition key (finding 11), keep paging until the page is full or the
+    // partition is exhausted, so `limit` still means what the caller expects and
+    // an empty page never looks like the end of the list.
+    const wantedLimit = queryParams.Limit as number;
+    const items: Record<string, any>[] = [];
+    let lastEvaluatedKey = queryParams.ExclusiveStartKey;
+    let pagesScanned = 0;
+
+    do {
+      const queryResult = await dynamodb.send(new QueryCommand({
+        ...queryParams,
+        ExclusiveStartKey: lastEvaluatedKey,
+      }));
+
+      items.push(...(queryResult.Items || []));
+      lastEvaluatedKey = queryResult.LastEvaluatedKey;
+      pagesScanned++;
+      // Bound the work so a filter matching nothing cannot run until timeout.
+    } while (lastEvaluatedKey && items.length < wantedLimit && pagesScanned < 10);
+
+    const pageItems = items.slice(0, wantedLimit);
+
     // Transform results
-    const thoughts: Thought[] = (queryResult.Items || [])
+    const thoughts: Thought[] = pageItems
       .map(item => unmarshall(item) as DynamoThought)
       .map(formatThought);
-    
-    // Create cursor for pagination
+
+    // Create cursor for pagination. If the fill loop over-read, resume from the
+    // last item actually returned rather than from where scanning stopped, or
+    // the surplus items would be skipped.
     let cursor: string | undefined;
-    if (queryResult.LastEvaluatedKey) {
-      cursor = Buffer.from(
-        JSON.stringify(queryResult.LastEvaluatedKey)
-      ).toString('base64');
+    if (items.length > wantedLimit) {
+      const lastReturned = pageItems[pageItems.length - 1];
+      cursor = Buffer.from(JSON.stringify({
+        pk: lastReturned.pk,
+        sk: lastReturned.sk,
+      })).toString('base64');
+    } else if (lastEvaluatedKey) {
+      cursor = Buffer.from(JSON.stringify(lastEvaluatedKey)).toString('base64');
     }
-    
+
     // Get total count (optional, expensive for large datasets)
     let totalCount: number | undefined;
     if (event.queryStringParameters?.includeCount === 'true') {

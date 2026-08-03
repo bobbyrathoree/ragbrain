@@ -111,33 +111,25 @@ export class StorageStack extends cdk.Stack {
       // See docs/AUDIT-2026-08.md finding 3.
     });
 
-    // Add GSIs for querying
-    this.thoughtsTable.addGlobalSecondaryIndex({
-      indexName: 'gsi1',
-      partitionKey: {
-        name: 'gsi1pk',
-        type: dynamodb.AttributeType.STRING,
-      },
-      sortKey: {
-        name: 'gsi1sk',
-        type: dynamodb.AttributeType.STRING,
-      },
-      projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    this.thoughtsTable.addGlobalSecondaryIndex({
-      indexName: 'gsi2',
-      partitionKey: {
-        name: 'type',
-        type: dynamodb.AttributeType.STRING,
-      },
-      sortKey: {
-        name: 'createdAt',
-        type: dynamodb.AttributeType.NUMBER,
-      },
-      projectionType: dynamodb.ProjectionType.INCLUDE,
-      nonKeyAttributes: ['text', 'tags', 'summary'],
-    });
+    // NOTE: gsi1 (`type#<type>` / `ts#<epoch>`, ProjectionType.ALL) and gsi2
+    // (`type` / `createdAt`, projecting text) have been REMOVED. Neither was
+    // partitioned by user, so any query against them crossed the tenant
+    // boundary: `GET /thoughts?type=note` returned every user's full note text
+    // to any authenticated caller. Reproduced live before removal.
+    //
+    // gsi1 was the only one ever queried; gsi2 was never read by any handler and
+    // duplicated the same flaw. `type` is now a FilterExpression on the caller's
+    // own partition (see functions/thoughts/index.ts).
+    //
+    // Do not add an index whose partition key omits the user. If a future access
+    // pattern needs one, key it `user#<user>#type#<type>` so the tenant boundary
+    // is enforced by the key itself rather than by remembering to filter.
+    // See docs/AUDIT-2026-08.md finding 11.
+    //
+    // Removed in two deploys, because DynamoDB permits only one GSI creation or
+    // deletion per stack update ("Cannot perform more than one GSI creation or
+    // deletion in a single update"). Anyone re-adding an index here should expect
+    // the same constraint.
 
     // GSI3 for listing conversations by user, sorted by last update
     this.thoughtsTable.addGlobalSecondaryIndex({
