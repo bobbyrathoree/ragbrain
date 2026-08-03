@@ -407,7 +407,7 @@ async function deleteDocumentsFromIndex(
       index: searchIndexName,
       body: {
         size: 50,
-        _source: ['id', 'user'],
+        _source: ['id', 'user', 'docType'],
         query: {
           bool: {
             must: [
